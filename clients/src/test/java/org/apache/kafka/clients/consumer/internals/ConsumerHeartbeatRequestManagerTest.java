@@ -314,6 +314,33 @@ public class ConsumerHeartbeatRequestManagerTest {
         }
     }
 
+    /**
+     * When the consumer uses manual partition assignment (assign()) instead of subscribe(), the
+     * member stays in UNSUBSCRIBED state indefinitely. Because heartbeats are skipped in that
+     * state and heartbeatIntervalMs initialises to 0, maximumTimeToWait used to return 0, causing
+     * a busy-loop in pollForFetches. Verify that maximumTimeToWait returns Long.MAX_VALUE whenever
+     * the member is in UNSUBSCRIBED state so the application thread can block for the full poll
+     * timeout.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    public void testMaximumTimeToWaitWhenHeartbeatShouldBeSkipped(final boolean isUnsubscribed) {
+        // Start with zero heartbeat interval (simulates the initial state before any HB response)
+        createHeartbeatRequestStateWithZeroHeartbeatInterval();
+        when(membershipManager.state()).thenReturn(isUnsubscribed ? MemberState.UNSUBSCRIBED : MemberState.JOINING);
+
+        long result = heartbeatRequestManager.maximumTimeToWait(time.milliseconds());
+
+        if (isUnsubscribed) {
+            assertEquals(Long.MAX_VALUE, result,
+                "maximumTimeToWait should return Long.MAX_VALUE when in UNSUBSCRIBED state " +
+                    "(e.g., manual assignment) to prevent a busy loop");
+        } else {
+            assertEquals(0, result,
+                "maximumTimeToWait should return 0 when heartbeat interval timer has already expired");
+        }
+    }
+
     @Test
     public void testTimerNotDue() {
         time.sleep(100); // time elapsed < heartbeatInterval, no heartbeat should be sent
@@ -425,6 +452,57 @@ public class ConsumerHeartbeatRequestManagerTest {
         assertEquals(1, result.unsentRequests.size());
         result.unsentRequests.get(0).handler().onFailure(time.milliseconds(), new KafkaException("fatal"));
         verify(membershipManager).onHeartbeatFailure(false);
+        verify(membershipManager).transitionToFatal();
+        verify(backgroundEventHandler).add(any());
+    }
+
+    /**
+     * Test that GROUP_ID_NOT_FOUND error while unsubscribed is not a fatal error.
+     * This can happen when the consumer never successfully joined the group
+     * (e.g., due to an InvalidTopicException during poll() and close() sends
+     * a leave heartbeat for a group that was never created.
+     */
+    @Test
+    public void testGroupIdNotFoundExceptionWhileUnsubscribed() {
+        // Setup: member is in UNSUBSCRIBED state with epoch -1
+        when(membershipManager.state()).thenReturn(MemberState.UNSUBSCRIBED);
+        when(membershipManager.memberEpoch()).thenReturn(-1);
+
+        time.sleep(DEFAULT_HEARTBEAT_INTERVAL_MS);
+        NetworkClientDelegate.PollResult result = heartbeatRequestManager.poll(time.milliseconds());
+        assertEquals(1, result.unsentRequests.size());
+
+        // Complete the heartbeat with GROUP_ID_NOT_FOUND error
+        ClientResponse response = createHeartbeatResponse(result.unsentRequests.get(0), Errors.GROUP_ID_NOT_FOUND);
+        result.unsentRequests.get(0).handler().onComplete(response);
+
+        // Verify: no fatal error, heartbeat skipped (benign)
+        verify(membershipManager, never()).transitionToFatal();
+        verify(membershipManager).onHeartbeatRequestSkipped();
+        verify(backgroundEventHandler, never()).add(any());
+    }
+
+    /**
+     * Test that GROUP_ID_NOT_FOUND error while stable is treated as fatal.
+     * This would indicate the group was unexpectedly deleted while the member
+     * was actively participating.
+     */
+    @Test
+    public void testGroupIdNotFoundWhileStableIsFatal() {
+        // Setup: member is in STABLE state with positive epoch
+        when(membershipManager.state()).thenReturn(MemberState.STABLE);
+        when(membershipManager.memberEpoch()).thenReturn(DEFAULT_MEMBER_EPOCH);
+
+        time.sleep(DEFAULT_HEARTBEAT_INTERVAL_MS);
+        NetworkClientDelegate.PollResult result = heartbeatRequestManager.poll(time.milliseconds());
+        assertEquals(1, result.unsentRequests.size());
+
+        // Complete the heartbeat with GROUP_ID_NOT_FOUND error
+        when(coordinatorRequestManager.coordinator()).thenReturn(Optional.empty());
+        ClientResponse response = createHeartbeatResponse(result.unsentRequests.get(0), Errors.GROUP_ID_NOT_FOUND);
+        result.unsentRequests.get(0).handler().onComplete(response);
+
+        // Verify: fatal error
         verify(membershipManager).transitionToFatal();
         verify(backgroundEventHandler).add(any());
     }
