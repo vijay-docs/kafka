@@ -16,12 +16,12 @@
  */
 package kafka.server
 
-import kafka.server.metadata.KRaftMetadataCache
 import org.apache.kafka.clients.NodeApiVersions
 import org.apache.kafka.common.message.ApiMessageType.ListenerType
 import org.apache.kafka.common.metadata.FeatureLevelRecord
 import org.apache.kafka.common.protocol.ApiKeys
 import org.apache.kafka.image.{MetadataDelta, MetadataImage, MetadataProvenance}
+import org.apache.kafka.metadata.KRaftMetadataCache
 import org.apache.kafka.server.{BrokerFeatures, DefaultApiVersionManager}
 import org.apache.kafka.server.common.{KRaftVersion, MetadataVersion}
 import org.junit.jupiter.api.Test
@@ -38,7 +38,9 @@ class DefaultApiVersionManagerTest {
   private val brokerFeatures = BrokerFeatures.createDefault(true)
   private val metadataCache = {
     val cache = new KRaftMetadataCache(1, () => KRaftVersion.LATEST_PRODUCTION)
-    val delta = new MetadataDelta(MetadataImage.EMPTY)
+    val delta = new MetadataDelta.Builder()
+      .setImage(MetadataImage.EMPTY)
+      .build()
     delta.replay(new FeatureLevelRecord()
       .setName(MetadataVersion.FEATURE_NAME)
       .setFeatureLevel(MetadataVersion.latestProduction().featureLevel())
