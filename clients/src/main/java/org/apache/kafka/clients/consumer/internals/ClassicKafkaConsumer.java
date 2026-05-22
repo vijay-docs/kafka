@@ -72,6 +72,7 @@ import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -210,6 +211,22 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     config.getList(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG),
                     config.originals(Collections.singletonMap(ConsumerConfig.CLIENT_ID_CONFIG, clientId))
             );
+
+            // If the classic rebalance protocol is used, log message to guide users towards upgrading to the
+            // next-generation consumer rebalance protocol
+            if (groupId.isPresent()) {
+                boolean isStreamsConsumer = assignors.stream()
+                        .anyMatch(a -> a.getClass().getName().contains("StreamsPartitionAssignor"));
+                if (!isStreamsConsumer) {
+                    log.info("\n" +
+                            "****************************************************************\n" +
+                            "* The consumer rebalance protocol (KIP-848) is production-ready!\n" +
+                            "* Set the consumer configuration {}={} to try it out.\n" +
+                            "* See https://kafka.apache.org/documentation/#consumer_rebalance_protocol\n" +
+                            "****************************************************************",
+                            ConsumerConfig.GROUP_PROTOCOL_CONFIG, GroupProtocol.CONSUMER.name().toLowerCase(Locale.ROOT));
+                }
+            }
 
             // no coordinator will be constructed for the default (null) group id
             if (groupId.isEmpty()) {
@@ -1049,25 +1066,7 @@ public class ClassicKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     public OptionalLong currentLag(TopicPartition topicPartition) {
         acquireAndEnsureOpen();
         try {
-            final Long lag = subscriptions.partitionLag(topicPartition, isolationLevel);
-
-            // if the log end offset is not known and hence cannot return lag and there is
-            // no in-flight list offset requested yet,
-            // issue a list offset request for that partition so that next time
-            // we may get the answer; we do not need to wait for the return value
-            // since we would not try to poll the network client synchronously
-            if (lag == null) {
-                if (subscriptions.partitionEndOffset(topicPartition, isolationLevel) == null &&
-                        !subscriptions.partitionEndOffsetRequested(topicPartition)) {
-                    log.info("Requesting the log end offset for {} in order to compute lag", topicPartition);
-                    subscriptions.requestPartitionEndOffset(topicPartition);
-                    offsetFetcher.endOffsets(Collections.singleton(topicPartition), time.timer(0L));
-                }
-
-                return OptionalLong.empty();
-            }
-
-            return OptionalLong.of(lag);
+            return offsetFetcher.currentLag(topicPartition);
         } finally {
             release();
         }

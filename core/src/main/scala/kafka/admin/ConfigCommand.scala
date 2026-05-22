@@ -18,19 +18,18 @@
 package kafka.admin
 
 import joptsimple._
-import kafka.server.DynamicConfig
 import kafka.utils.Implicits._
 import kafka.utils.Logging
 import org.apache.kafka.clients.admin.{Admin, AlterClientQuotasOptions, AlterConfigOp, AlterConfigsOptions, ConfigEntry, DescribeClusterOptions, DescribeConfigsOptions, ListConfigResourcesOptions, ListTopicsOptions, ScramCredentialInfo, UserScramCredentialDeletion, UserScramCredentialUpsertion, ScramMechanism => PublicScramMechanism}
 import org.apache.kafka.common.config.ConfigResource
-import org.apache.kafka.common.errors.{InvalidConfigurationException, UnsupportedVersionException}
+import org.apache.kafka.common.errors.{ClusterAuthorizationException, InvalidConfigurationException, UnsupportedVersionException}
 import org.apache.kafka.common.internals.Topic
 import org.apache.kafka.common.protocol.ApiKeys
 import org.apache.kafka.common.quota.{ClientQuotaAlteration, ClientQuotaEntity, ClientQuotaFilter, ClientQuotaFilterComponent}
 import org.apache.kafka.common.security.scram.internals.ScramMechanism
 import org.apache.kafka.common.utils.{Exit, Utils}
 import org.apache.kafka.coordinator.group.GroupConfig
-import org.apache.kafka.server.config.{ConfigType, QuotaConfig}
+import org.apache.kafka.server.config.{ConfigType, DynamicConfig, QuotaConfig}
 import org.apache.kafka.server.metrics.ClientMetricsConfigs
 import org.apache.kafka.server.util.{CommandDefaultOptions, CommandLineUtils}
 import org.apache.kafka.storage.internals.log.LogConfig
@@ -137,7 +136,8 @@ object ConfigCommand extends Logging {
 
   private def validatePropsKey(props: Properties): Unit = {
     props.keySet.forEach { propsKey =>
-      if (!propsKey.toString.matches("[a-zA-Z0-9._-]*")) {
+      // Allows the '$' symbol to support valid logger names for internal classes (e.g. org.apache.kafka.server.quota.ClientQuotaManager$ThrottledChannelReaper)
+      if (!propsKey.toString.matches("[$a-zA-Z0-9._-]*")) {
         throw new IllegalArgumentException(
           s"Invalid character found for config key: $propsKey"
         )
@@ -184,12 +184,15 @@ object ConfigCommand extends Logging {
         val configResourceType = entityTypeHead match {
           case TopicType => ConfigResource.Type.TOPIC
           case ClientMetricsType => ConfigResource.Type.CLIENT_METRICS
-          case BrokerType => ConfigResource.Type.BROKER
+          case BrokerType =>
+            if (entityNameHead.nonEmpty)
+              validateBrokerId(entityNameHead, entityTypeHead)
+            ConfigResource.Type.BROKER
           case GroupType => ConfigResource.Type.GROUP
           case _ => throw new IllegalArgumentException(s"$entityNameHead is not a valid entity-type.")
         }
         try {
-          alterResourceConfig(adminClient, entityTypeHead, entityNameHead, configsToBeDeleted, configsToBeAdded, configResourceType)
+          alterResourceConfig(adminClient, entityNameHead, configsToBeDeleted, configsToBeAdded, configResourceType)
         } catch {
           case e: ExecutionException =>
             e.getCause match {
@@ -202,7 +205,7 @@ object ConfigCommand extends Logging {
         }
 
       case BrokerLoggerConfigType =>
-        val validLoggers = getResourceConfig(adminClient, entityTypeHead, entityNameHead, includeSynonyms = true, describeAll = false).map(_.name)
+        val validLoggers = getResourceConfig(adminClient, entityTypeHead, entityNameHead, includeSynonyms = false, describeAll = false).map(_.name)
         // fail the command if any of the configured broker loggers do not exist
         val invalidBrokerLoggers = configsToBeDeleted.filterNot(validLoggers.contains) ++ configsToBeAdded.keys.filterNot(validLoggers.contains)
         if (invalidBrokerLoggers.nonEmpty)
@@ -367,9 +370,7 @@ object ConfigCommand extends Logging {
               return
             }
           case GroupType =>
-            if (adminClient.listGroups().all.get.stream.noneMatch(_.groupId() == name) &&
-              adminClient.listConfigResources(java.util.Set.of(ConfigResource.Type.GROUP), new ListConfigResourcesOptions).all.get
-                .stream.noneMatch(_.name == name)) {
+            if (adminClient.listGroups().all.get.stream.noneMatch(_.groupId == name) && listGroupConfigResources(adminClient).exists(resources => resources.stream.noneMatch(_.name == name))) {
               System.out.println(s"The ${entityType.dropRight(1)} '$name' doesn't exist and doesn't have dynamic config.")
               return
             }
@@ -388,8 +389,7 @@ object ConfigCommand extends Logging {
         case ClientMetricsType =>
           adminClient.listConfigResources(java.util.Set.of(ConfigResource.Type.CLIENT_METRICS), new ListConfigResourcesOptions).all().get().asScala.map(_.name).toSeq
         case GroupType =>
-          adminClient.listGroups().all.get.asScala.map(_.groupId).toSet ++
-            adminClient.listConfigResources(java.util.Set.of(ConfigResource.Type.GROUP), new ListConfigResourcesOptions).all().get().asScala.map(_.name).toSet
+          adminClient.listGroups().all.get.asScala.map(_.groupId).toSet ++ listGroupConfigResources(adminClient).map(resources => resources.asScala.map(_.name).toSet).getOrElse(Set.empty)
         case entityType => throw new IllegalArgumentException(s"Invalid entity type: $entityType")
       })
 
@@ -408,15 +408,7 @@ object ConfigCommand extends Logging {
     }
   }
 
-  private def alterResourceConfig(adminClient: Admin, entityTypeHead: String, entityNameHead: String, configsToBeDeleted: Seq[String], configsToBeAdded: Map[String, ConfigEntry], resourceType: ConfigResource.Type): Unit = {
-    val oldConfig = getResourceConfig(adminClient, entityTypeHead, entityNameHead, includeSynonyms = false, describeAll = false)
-      .map { entry => (entry.name, entry) }.toMap
-
-    // fail the command if any of the configs to be deleted does not exist
-    val invalidConfigs = configsToBeDeleted.filterNot(oldConfig.contains)
-    if (invalidConfigs.nonEmpty)
-      throw new InvalidConfigurationException(s"Invalid config(s): ${invalidConfigs.mkString(",")}")
-
+  private def alterResourceConfig(adminClient: Admin, entityNameHead: String, configsToBeDeleted: Seq[String], configsToBeAdded: Map[String, ConfigEntry], resourceType: ConfigResource.Type): Unit = {
     val configResource = new ConfigResource(resourceType, entityNameHead)
     val alterOptions = new AlterConfigsOptions().timeoutMs(30000).validateOnly(false)
     val addEntries = configsToBeAdded.values.map(k => new AlterConfigOp(k, AlterConfigOp.OpType.SET))
@@ -425,11 +417,12 @@ object ConfigCommand extends Logging {
     adminClient.incrementalAlterConfigs(Map(configResource -> alterEntries).asJava, alterOptions).all().get(60, TimeUnit.SECONDS)
   }
 
+  private def validateBrokerId(entityName: String, entityType: String): Unit = try entityName.toInt catch {
+    case _: NumberFormatException =>
+      throw new IllegalArgumentException(s"The entity name for $entityType must be a valid integer broker id, found: $entityName")
+  }
+
   private def getResourceConfig(adminClient: Admin, entityType: String, entityName: String, includeSynonyms: Boolean, describeAll: Boolean) = {
-    def validateBrokerId(): Unit = try entityName.toInt catch {
-      case _: NumberFormatException =>
-        throw new IllegalArgumentException(s"The entity name for $entityType must be a valid integer broker id, found: $entityName")
-    }
 
     val (configResourceType, dynamicConfigSource) = entityType match {
       case TopicType =>
@@ -440,12 +433,12 @@ object ConfigCommand extends Logging {
         case BrokerDefaultEntityName =>
           (ConfigResource.Type.BROKER, Some(ConfigEntry.ConfigSource.DYNAMIC_DEFAULT_BROKER_CONFIG))
         case _ =>
-          validateBrokerId()
+          validateBrokerId(entityName, entityType)
           (ConfigResource.Type.BROKER, Some(ConfigEntry.ConfigSource.DYNAMIC_BROKER_CONFIG))
       }
       case BrokerLoggerConfigType =>
         if (entityName.nonEmpty)
-          validateBrokerId()
+          validateBrokerId(entityName, entityType)
         (ConfigResource.Type.BROKER_LOGGER, None)
       case ClientMetricsType =>
         (ConfigResource.Type.CLIENT_METRICS, Some(ConfigEntry.ConfigSource.DYNAMIC_CLIENT_METRICS_CONFIG))
@@ -537,6 +530,17 @@ object ConfigCommand extends Logging {
     adminClient.describeClientQuotas(ClientQuotaFilter.containsOnly(components.asJava)).entities.get(30, TimeUnit.SECONDS).asScala
   }
 
+  private def listGroupConfigResources(adminClient: Admin): Option[java.util.Collection[ConfigResource]] = {
+    try {
+      Some(adminClient.listConfigResources(java.util.Set.of(ConfigResource.Type.GROUP), new ListConfigResourcesOptions).all.get)
+    } catch {
+      // (KIP-1142) 4.1+ admin client vs older broker: treat UnsupportedVersionException and ClusterAuthorizationException as None
+      case e: ExecutionException if e.getCause.isInstanceOf[UnsupportedVersionException] => None
+      case e: ExecutionException if e.getCause.isInstanceOf[ClusterAuthorizationException] => None
+      case e: ExecutionException => throw e.getCause
+    }
+  }
+
 
   class ConfigCommandOptions(args: Array[String]) extends CommandDefaultOptions(args) {
     val bootstrapServerOpt: OptionSpec[String] = parser.accepts("bootstrap-server", "The Kafka servers to connect to.")
@@ -572,7 +576,7 @@ object ConfigCommand extends Logging {
       "For entity-type '" + ClientType + "': " + QuotaConfig.userAndClientQuotaConfigs().names.asScala.toSeq.sorted.map("\t" + _).mkString(nl, nl, nl) +
       "For entity-type '" + IpType + "': " + QuotaConfig.ipConfigs.names.asScala.toSeq.sorted.map("\t" + _).mkString(nl, nl, nl) +
       "For entity-type '" + ClientMetricsType + "': " + ClientMetricsConfigs.configDef().names.asScala.toSeq.sorted.map("\t" + _).mkString(nl, nl, nl) +
-      "For entity-type '" + GroupType + "': " + GroupConfig.configDef().names.asScala.toSeq.sorted.map("\t" + _).mkString(nl, nl, nl) +
+      "For entity-type '" + GroupType + "': " + GroupConfig.CONFIG_DEF.names.asScala.toSeq.sorted.map("\t" + _).mkString(nl, nl, nl) +
       s"Entity types '$UserType' and '$ClientType' may be specified together to update config for clients of a specific user.")
       .withRequiredArg
       .ofType(classOf[String])

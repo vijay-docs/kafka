@@ -33,7 +33,7 @@ Interactive queries allow you to leverage the state of your application from out
 
 The full state of your application is typically [split across many distributed instances of your application](../architecture.html#streams_architecture_state), and across many state stores that are managed locally by these application instances.
 
-![](/42/images/streams-interactive-queries-03.png)
+![](/43/images/streams-interactive-queries-03.png)
 
 There are local and remote components to interactively querying the state of your application.
 
@@ -129,7 +129,7 @@ A Kafka Streams application typically runs on multiple instances. The state that
 
 The method `KafkaStreams#store(...)` finds an application instance's local state stores by name and type. Note that interactive queries are not supported for [versioned state stores](processor-api.html#streams-developer-guide-state-store-versioned) at this time.
 
-![](/42/images/streams-interactive-queries-api-01.png)
+![](/43/images/streams-interactive-queries-api-01.png)
 
 Every application instance can directly query any of its local state stores.
 
@@ -169,7 +169,7 @@ To query a local key-value store, you must first create a topology with a key-va
     KafkaStreams streams = new KafkaStreams(builder, props);
     streams.start();
 
-After the application has started, you can get access to "CountsKeyValueStore" and then query it via the [ReadOnlyKeyValueStore](https://github.com/apache/kafka/blob/4.2/streams/src/main/java/org/apache/kafka/streams/state/ReadOnlyKeyValueStore.java) API:
+After the application has started, you can get access to "CountsKeyValueStore" and then query it via the [ReadOnlyKeyValueStore](https://github.com/apache/kafka/blob/4.3/streams/src/main/java/org/apache/kafka/streams/state/ReadOnlyKeyValueStore.java) API:
     
     
     // Get the key-value store CountsKeyValueStore
@@ -227,7 +227,7 @@ To query a local window store, you must first create a topology with a window st
     groupedByWord.windowedBy(TimeWindows.ofSizeWithNoGrace(Duration.ofSeconds(60)))
       .count(Materialized.<String, Long, WindowStore<Bytes, byte[]>as("CountsWindowStore"));
 
-After the application has started, you can get access to "CountsWindowStore" and then query it via the [ReadOnlyWindowStore](https://github.com/apache/kafka/blob/4.2/streams/src/main/java/org/apache/kafka/streams/state/ReadOnlyWindowStore.java) API:
+After the application has started, you can get access to "CountsWindowStore" and then query it via the [ReadOnlyWindowStore](https://github.com/apache/kafka/blob/4.3/streams/src/main/java/org/apache/kafka/streams/state/ReadOnlyWindowStore.java) API:
     
     
     // Get the window store named "CountsWindowStore"
@@ -283,7 +283,7 @@ The class/interface hierarchy for your custom store might look something like:
 
 To make this store queryable you must:
 
-  * Provide an implementation of [QueryableStoreType](https://github.com/apache/kafka/blob/4.2/streams/src/main/java/org/apache/kafka/streams/state/QueryableStoreType.java).
+  * Provide an implementation of [QueryableStoreType](https://github.com/apache/kafka/blob/4.3/streams/src/main/java/org/apache/kafka/streams/state/QueryableStoreType.java).
   * Provide a wrapper class that has access to all of the underlying instances of the store and is used for querying.
 
 
@@ -306,7 +306,7 @@ Here is how to implement `QueryableStoreType`:
 
 A wrapper class is required because each instance of a Kafka Streams application may run multiple stream tasks and manage multiple local instances of a particular state store. The wrapper class hides this complexity and lets you query a "logical" state store by name without having to know about all of the underlying local instances of that state store.
 
-When implementing your wrapper class you must use the [StateStoreProvider](https://github.com/apache/kafka/blob/4.2/streams/src/main/java/org/apache/kafka/streams/state/internals/StateStoreProvider.java) interface to get access to the underlying instances of your store. `StateStoreProvider#stores(String storeName, QueryableStoreType<T> queryableStoreType)` returns a `List` of state stores with the given storeName and of the type as defined by `queryableStoreType`.
+When implementing your wrapper class you must use the [StateStoreProvider](https://github.com/apache/kafka/blob/4.3/streams/src/main/java/org/apache/kafka/streams/state/internals/StateStoreProvider.java) interface to get access to the underlying instances of your store. `StateStoreProvider#stores(String storeName, QueryableStoreType<T> queryableStoreType)` returns a `List` of state stores with the given storeName and of the type as defined by `queryableStoreType`.
 
 Here is an example implementation of the wrapper:
     
@@ -374,7 +374,7 @@ For example, you have a Kafka Streams application that processes user events in 
 
 
 
-![](/42/images/streams-interactive-queries-api-02.png)
+![](/43/images/streams-interactive-queries-api-02.png)
 
 Discover any running instances of the same application as well as the respective RPC endpoints they expose for interactive queries
 
@@ -384,7 +384,7 @@ There are many ways to add an RPC layer. The only requirements are that the RPC 
 
 ## Exposing the RPC endpoints of your application
 
-To enable remote state store discovery in a distributed Kafka Streams application, you must set the [configuration property](config-streams.html#streams-developer-guide-required-configs) in the config properties. The `application.server` property defines a unique `host:port` pair that points to the RPC endpoint of the respective instance of a Kafka Streams application. The value of this configuration property will vary across the instances of your application. When this property is set, Kafka Streams will keep track of the RPC endpoint information for every instance of an application, its state stores, and assigned stream partitions through instances of [StreamsMetadata](/42/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html).
+To enable remote state store discovery in a distributed Kafka Streams application, you must set the [configuration property](config-streams.html#streams-developer-guide-required-configs) in the config properties. The `application.server` property defines a unique `host:port` pair that points to the RPC endpoint of the respective instance of a Kafka Streams application. The value of this configuration property will vary across the instances of your application. When this property is set, Kafka Streams will keep track of the RPC endpoint information for every instance of an application, its state stores, and assigned stream partitions through instances of [StreamsMetadata](/{version}/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html).
 
 **Tip**
 
@@ -429,7 +429,7 @@ This example shows how to configure and run a Kafka Streams application that sup
 
 ## Discovering and accessing application instances and their local state stores
 
-The following methods return [StreamsMetadata](/42/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html) objects, which provide meta-information about application instances such as their RPC endpoint and locally available state stores.
+The following methods return [StreamsMetadata](/{version}/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html) objects, which provide meta-information about application instances such as their RPC endpoint and locally available state stores.
 
   * `KafkaStreams#allMetadata()`: find all instances of this application
   * `KafkaStreams#allMetadataForStore(String storeName)`: find those applications instances that manage local instances of the state store "storeName"
@@ -440,7 +440,7 @@ The following methods return [StreamsMetadata](/42/javadoc/org/apache/kafka/stre
 
 Attention
 
-If `application.server` is not configured for an application instance, then the above methods will not find any [StreamsMetadata](/42/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html) for it.
+If `application.server` is not configured for an application instance, then the above methods will not find any [StreamsMetadata](/{version}/javadoc/org/apache/kafka/streams/state/StreamsMetadata.html) for it.
 
 For example, we can now find the `StreamsMetadata` for the state store named "word-count" that we defined in the code example shown in the previous section:
     
