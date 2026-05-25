@@ -86,16 +86,21 @@ org.apache.kafka.controller.ClusterControlManagerTest:
 - testReplayRegisterBrokerRecord
 - testUnregister
 org.apache.kafka.controller.ConfigurationControlManagerTest:
+- testCordonedLogDirsFeature
 - testElrUpgrade
 - testIncrementalAlterConfig
 - testIncrementalAlterConfigs
 - testIncrementalAlterConfigsWithPolicy
 - testIncrementalAlterConfigsWithoutExistence
 - testIncrementalAlterMultipleConfigValues
+- testIsCordonedLogDirsDisabled
+- testIsCordonedLogDirsInvalid
 - testLegacyAlterConfigs
 - testMaybeGenerateElrSafetyRecords
 - testRejectMinIsrChangeWhenElrEnabled
 - testReplay
+- testReplayFiltersInvalidConfigs
+- testValidateAlterConfigWithInvalidExistingConfigs
 org.apache.kafka.controller.EventPerformanceMonitorTest:
 - testDefaultPeriodNs
 - testDoNotLogFastEvent
@@ -304,6 +309,7 @@ org.apache.kafka.controller.ReplicationControlManagerTest:
 - testFenceMultipleBrokers
 - testHandleAssignReplicasToDirs
 - testHandleAssignReplicasToDirsFailsOnOlderMv
+- testHandleDirectoriesCordoned
 - testHandleDirectoriesOffline
 - testInvalidAlterPartitionRequests
 - testInvalidCreateTopicsWithValidateOnlyFlag
@@ -410,10 +416,22 @@ org.apache.kafka.image.AclsImageTest:
 - testImage1RoundTrip
 - testImage2RoundTrip
 org.apache.kafka.image.ClientQuotasImageTest:
+- client
+- ip
 - testApplyDelta1
+- testDescribeNonStrictEmptyRequest
+- testDescribeWithDefaultMatchNonNullMatch
+- testDescribeWithDuplicateEntityType
+- testDescribeWithEmptyEntityType
+- testDescribeWithExactMatchNullMatch
+- testDescribeWithNonStrictTypeMatch
+- testDescribeWithSpecifiedMatchNonNullMatch
+- testDescribeWithStrictMode
+- testDescribeWithUnknownMatchType
 - testEmptyImageRoundTrip
 - testImage1RoundTrip
 - testImage2RoundTrip
+- user
 org.apache.kafka.image.ClusterImageTest:
 - testApplyDelta1
 - testApplyDelta2
@@ -426,6 +444,8 @@ org.apache.kafka.image.ClusterImageTest:
 - testImage3RoundTrip
 org.apache.kafka.image.ConfigurationsImageTest:
 - testApplyDelta1
+- testConfigurationDeltaFiltering
+- testConfigurationDeltaWithoutFiltering
 - testEmptyImageRoundTrip
 - testImage1RoundTrip
 - testImage2RoundTrip
@@ -506,6 +526,7 @@ org.apache.kafka.image.loader.MetadataBatchLoaderTest:
 - testUnexpectedAbortTransaction
 - testUnexpectedBeginTransaction
 - testUnexpectedEndTransaction
+- testUnsupportedConfigFilteredInBatch
 org.apache.kafka.image.loader.MetadataLoaderTest:
 - testCatchingUpState
 - testCreateAndClose
@@ -521,6 +542,8 @@ org.apache.kafka.image.loader.MetadataLoaderTest:
 - testReloadSnapshot
 - testRemovePublisher
 - testSnapshotDuringTransaction
+- testUnsupportedConfigFilteredInCommit
+- testUnsupportedConfigFilteredInSnapshot
 org.apache.kafka.image.loader.metrics.MetadataLoaderMetricsTest:
 - testAvgIdleRatio
 - testFinalizedFeatureLevelMetrics
@@ -648,10 +671,14 @@ org.apache.kafka.metadata.BrokerRegistrationInControlledShutdownChangeTest:
 - testValueRoundTrip
 - testValues
 org.apache.kafka.metadata.BrokerRegistrationTest:
+- testCordonedDirChanged
+- testCordonedDirectories
+- testCordonedLogDirsRoundTrip
 - testDirectoriesAreSorted
 - testEquals
 - testFromRecordAndToRecord
 - testHasOnlineDir
+- testHasUncordonedDirs
 - testToNode
 - testToString
 - testValues
@@ -714,6 +741,22 @@ org.apache.kafka.metadata.ListenerInfoTest:
 - testToControllerRegistrationRequestFailsOnNullHost
 - testToControllerRegistrationRequestFailsOnZeroPort
 - testToString
+org.apache.kafka.metadata.MetadataCacheTest:
+- getAliveBrokersShouldNotBeMutatedByUpdateCache
+- getTopicMetadata
+- getTopicMetadataIsrNotAvailable
+- getTopicMetadataNonExistingTopics
+- getTopicMetadataPartitionLeaderNotAvailable
+- getTopicMetadataPartitionListenerNotAvailableOnLeader
+- getTopicMetadataReplicaNotAvailable
+- getTopicMetadataWithNonSupportedSecurityProtocol
+- testDescribeTopicResponse
+- testGetLeaderAndIsr
+- testGetLiveBrokerEpoch
+- testGetOfflineReplicasConsidersDirAssignment
+- testGetPartitionReplicaEndpoints
+- testIsBrokerFenced
+- testIsBrokerInControlledShutdown
 org.apache.kafka.metadata.MetadataRecordSerdeTest:
 - testDeserializeWithUnhandledFrameVersion
 - testParsingMalformedFrameVersionVarint
@@ -848,70 +891,6 @@ org.apache.kafka.metadata.placement.TopicAssignmentTest:
 - testConsistentEqualsAndHashCode
 - testToString
 - testTopicAssignmentReplicas
-org.apache.kafka.metadata.properties.MetaPropertiesEnsembleTest:
-- testClusterIdForEmpty
-- testClusterIdForFoo
-- testCopierGenerateValidDirectoryId
-- testCopierVerificationFailsOnEmptyAndErrorOverlap
-- testCopierVerificationFailsOnEmptyAndLogDirsOverlap
-- testCopierVerificationFailsOnErrorAndLogDirsOverlap
-- testCopierWithoutModifications
-- testCopierWriteChanged
-- testCopierWriteLogDirChanges
-- testCopyFooItemByItem
-- testEmptyLogDirsForEmpty
-- testEmptyLogDirsForFoo
-- testErrorLogDirsForEmpty
-- testErrorLogDirsForFoo
-- testLogDirPropsForEmpty
-- testLogDirPropsForFoo
-- testMetaPropertiesEnsembleLoad
-- testMetaPropertiesEnsembleLoadEmpty
-- testMetaPropertiesEnsembleLoadError
-- testMetadataLogDirForEmpty
-- testMetadataLogDirForFoo
-- testNodeIdForEmpty
-- testNodeIdForFoo
-- testNonFailedDirectoryPropsForEmpty
-- testNonFailedDirectoryPropsForFoo
-- testSuccessfulVerification
-- testSuccessfulVerificationWithClusterId
-- testSuccessfulVerificationWithClusterIdAndNodeId
-- testVerificationFailureOnLackOfMetadataLogDir
-- testVerificationFailureOnMetadataLogDirWithError
-- testVerificationFailureOnRequireAtLeastOneValid
-- testVerificationFailureOnRequireV0
-org.apache.kafka.metadata.properties.MetaPropertiesTest:
-- testClusterIdRequiredInV1
-- testNodeIdRequiredInV1
-- testV0SerializationWithAll
-- testV0SerializationWithJustClusterId
-- testV0SerializationWithJustClusterIdAndNodeId
-- testV0SerializationWithJustNodeId
-- testV0SerializationWithNothing
-- testV1SerializationWithDirectoryId
-- testV1SerializationWithNonUuidClusterId
-- testV1SerializationWithoutDirectoryId
-org.apache.kafka.metadata.properties.MetaPropertiesVersionTest:
-- testAlwaysHasClusterId
-- testAlwaysHasNodeId
-- testFromInvalidNumber
-- testFromInvalidString
-- testHasBrokerId
-- testV0FromNumber
-- testV0FromNumberString
-- testV0ToNumber
-- testV0ToNumberString
-- testV1FromNumber
-- testV1FromNumberString
-- testV1ToNumber
-- testV1ToNumberString
-org.apache.kafka.metadata.properties.PropertiesUtilsTest:
-- loadMissingRequiredIntProp
-- loadNonIntegerRequiredIntProp
-- loadRequiredIntProp
-- testReadPropertiesFile
-- testWritePropertiesFile
 org.apache.kafka.metadata.storage.FormatterTest:
 - testDirectories
 - testFeatureFlag
