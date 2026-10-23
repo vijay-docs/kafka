@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.common.IsolationLevel;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.serialization.Serde;
@@ -40,6 +41,7 @@ import org.apache.kafka.streams.query.QueryResult;
 import org.apache.kafka.streams.query.WindowRangeQuery;
 import org.apache.kafka.streams.query.internals.InternalQueryResultUtil;
 import org.apache.kafka.streams.state.KeyValueIterator;
+import org.apache.kafka.streams.state.ReadOnlySessionStore;
 import org.apache.kafka.streams.state.SessionStore;
 import org.apache.kafka.streams.state.StateSerdes;
 import org.apache.kafka.streams.state.internals.StoreQueryUtils.QueryHandler;
@@ -81,14 +83,13 @@ public class MeteredSessionStore<K, V>
     protected final LongAdder numOpenIterators = new LongAdder();
     protected final NavigableSet<MeteredIterator> openIterators = new ConcurrentSkipListSet<>(Comparator.comparingLong(MeteredIterator::startTimestamp));
 
-    @SuppressWarnings("rawtypes")
-    private final Map<Class, QueryHandler> queryHandlers =
-            mkMap(
-                    mkEntry(
-                            WindowRangeQuery.class,
-                            (query, positionBound, config, store) -> runRangeQuery(query, positionBound, config)
-                    )
-            );
+    private final Map<Class<?>, QueryHandler<?>> queryHandlers =
+        mkMap(
+            mkEntry(
+                WindowRangeQuery.class,
+                (query, positionBound, config, store) -> runRangeQuery(query, positionBound, config)
+            )
+        );
 
 
     MeteredSessionStore(
@@ -255,172 +256,158 @@ public class MeteredSessionStore<K, V>
     @Override
     public KeyValueIterator<Windowed<K>, V> fetch(final K key) {
         Objects.requireNonNull(key, "key cannot be null");
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().fetch(serializeKey(key)),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+        return meteredWindowedIterator(wrapped().fetch(serializeKey(key)));
     }
 
     @Override
     public KeyValueIterator<Windowed<K>, V> backwardFetch(final K key) {
         Objects.requireNonNull(key, "key cannot be null");
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().backwardFetch(serializeKey(key)),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+        return meteredWindowedIterator(wrapped().backwardFetch(serializeKey(key)));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> fetch(
-        final K keyFrom,
-        final K keyTo
-    ) {
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().fetch(serializeKey(keyFrom), serializeKey(keyTo)),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+    public KeyValueIterator<Windowed<K>, V> fetch(final K keyFrom, final K keyTo) {
+        return meteredWindowedIterator(wrapped().fetch(serializeKey(keyFrom), serializeKey(keyTo)));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> backwardFetch(
-        final K keyFrom,
-        final K keyTo
-    ) {
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().backwardFetch(serializeKey(keyFrom), serializeKey(keyTo)),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+    public KeyValueIterator<Windowed<K>, V> backwardFetch(final K keyFrom, final K keyTo) {
+        return meteredWindowedIterator(wrapped().backwardFetch(serializeKey(keyFrom), serializeKey(keyTo)));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> findSessions(
-        final K key,
-        final long earliestSessionEndTime,
-        final long latestSessionStartTime
-    ) {
+    public KeyValueIterator<Windowed<K>, V> findSessions(final K key,
+                                                         final long earliestSessionEndTime,
+                                                         final long latestSessionStartTime) {
         Objects.requireNonNull(key, "key cannot be null");
-        final Bytes bytesKey = serializeKey(key);
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().findSessions(
-                bytesKey,
-                earliestSessionEndTime,
-                latestSessionStartTime),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+        return meteredWindowedIterator(wrapped().findSessions(serializeKey(key), earliestSessionEndTime, latestSessionStartTime));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> backwardFindSessions(
-        final K key,
-        final long earliestSessionEndTime,
-        final long latestSessionStartTime
-    ) {
+    public KeyValueIterator<Windowed<K>, V> backwardFindSessions(final K key,
+                                                                 final long earliestSessionEndTime,
+                                                                 final long latestSessionStartTime) {
         Objects.requireNonNull(key, "key cannot be null");
-        final Bytes bytesKey = serializeKey(key);
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().backwardFindSessions(
-                bytesKey,
-                earliestSessionEndTime,
-                latestSessionStartTime
-            ),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+        return meteredWindowedIterator(wrapped().backwardFindSessions(serializeKey(key), earliestSessionEndTime, latestSessionStartTime));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> findSessions(
-        final K keyFrom,
-        final K keyTo,
-        final long earliestSessionEndTime,
-        final long latestSessionStartTime
-    ) {
-        final Bytes bytesKeyFrom = serializeKey(keyFrom);
-        final Bytes bytesKeyTo = serializeKey(keyTo);
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().findSessions(
-                bytesKeyFrom,
-                bytesKeyTo,
-                earliestSessionEndTime,
-                latestSessionStartTime),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+    public KeyValueIterator<Windowed<K>, V> findSessions(final K keyFrom,
+                                                         final K keyTo,
+                                                         final long earliestSessionEndTime,
+                                                         final long latestSessionStartTime) {
+        return meteredWindowedIterator(wrapped().findSessions(serializeKey(keyFrom), serializeKey(keyTo), earliestSessionEndTime, latestSessionStartTime));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> findSessions(
-        final long earliestSessionEndTime,
-        final long latestSessionEndTime
-    ) {
-        return new MeteredWindowedKeyValueIterator<>(
-            wrapped().findSessions(earliestSessionEndTime, latestSessionEndTime),
-            fetchSensor,
-            iteratorDurationSensor,
-            this::deserializeKey,
-            this::deserializeValue,
-            time,
-            numOpenIterators,
-            openIterators
-        );
+    public KeyValueIterator<Windowed<K>, V> findSessions(final long earliestSessionEndTime,
+                                                         final long latestSessionEndTime) {
+        return meteredWindowedIterator(wrapped().findSessions(earliestSessionEndTime, latestSessionEndTime));
     }
 
     @Override
-    public KeyValueIterator<Windowed<K>, V> backwardFindSessions(
-        final K keyFrom,
-        final K keyTo,
-        final long earliestSessionEndTime,
-        final long latestSessionStartTime
-    ) {
-        final Bytes bytesKeyFrom = serializeKey(keyFrom);
-        final Bytes bytesKeyTo = serializeKey(keyTo);
+    public KeyValueIterator<Windowed<K>, V> backwardFindSessions(final K keyFrom,
+                                                                 final K keyTo,
+                                                                 final long earliestSessionEndTime,
+                                                                 final long latestSessionStartTime) {
+        return meteredWindowedIterator(wrapped().backwardFindSessions(serializeKey(keyFrom), serializeKey(keyTo), earliestSessionEndTime, latestSessionStartTime));
+    }
+
+    @Override
+    public ReadOnlySessionStore<K, V> readOnly(final IsolationLevel isolationLevel) {
+        Objects.requireNonNull(isolationLevel, "isolationLevel cannot be null");
+        return new ReadOnlyView(wrapped().readOnly(isolationLevel));
+    }
+
+    private final class ReadOnlyView implements ReadOnlySessionStore<K, V> {
+
+        private final ReadOnlySessionStore<Bytes, byte[]> underlying;
+
+        ReadOnlyView(final ReadOnlySessionStore<Bytes, byte[]> underlying) {
+            this.underlying = underlying;
+        }
+
+        @Override
+        public V fetchSession(
+            final K key,
+            final long earliestSessionEndTime,
+            final long latestSessionStartTime
+        ) {
+            Objects.requireNonNull(key, "key cannot be null");
+            return maybeMeasureLatency(
+                () -> deserializeValue(underlying.fetchSession(serializeKey(key), earliestSessionEndTime, latestSessionStartTime)),
+                time,
+                fetchSensor
+            );
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> fetch(final K key) {
+            Objects.requireNonNull(key, "key cannot be null");
+            return meteredWindowedIterator(underlying.fetch(serializeKey(key)));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> backwardFetch(final K key) {
+            Objects.requireNonNull(key, "key cannot be null");
+            return meteredWindowedIterator(underlying.backwardFetch(serializeKey(key)));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> fetch(final K keyFrom, final K keyTo) {
+            return meteredWindowedIterator(underlying.fetch(serializeKey(keyFrom), serializeKey(keyTo)));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> backwardFetch(final K keyFrom, final K keyTo) {
+            return meteredWindowedIterator(underlying.backwardFetch(serializeKey(keyFrom), serializeKey(keyTo)));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> findSessions(
+            final K key,
+            final long earliestSessionEndTime,
+            final long latestSessionStartTime
+        ) {
+            Objects.requireNonNull(key, "key cannot be null");
+            return meteredWindowedIterator(underlying.findSessions(serializeKey(key), earliestSessionEndTime, latestSessionStartTime));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> backwardFindSessions(
+            final K key,
+            final long earliestSessionEndTime,
+            final long latestSessionStartTime
+        ) {
+            Objects.requireNonNull(key, "key cannot be null");
+            return meteredWindowedIterator(underlying.backwardFindSessions(serializeKey(key), earliestSessionEndTime, latestSessionStartTime));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> findSessions(
+            final K keyFrom,
+            final K keyTo,
+            final long earliestSessionEndTime,
+            final long latestSessionStartTime
+        ) {
+            return meteredWindowedIterator(underlying.findSessions(serializeKey(keyFrom), serializeKey(keyTo), earliestSessionEndTime, latestSessionStartTime));
+        }
+
+        @Override
+        public KeyValueIterator<Windowed<K>, V> backwardFindSessions(
+            final K keyFrom,
+            final K keyTo,
+            final long earliestSessionEndTime,
+            final long latestSessionStartTime
+        ) {
+            return meteredWindowedIterator(underlying.backwardFindSessions(serializeKey(keyFrom), serializeKey(keyTo), earliestSessionEndTime, latestSessionStartTime));
+        }
+
+    }
+
+    private KeyValueIterator<Windowed<K>, V> meteredWindowedIterator(final KeyValueIterator<Windowed<Bytes>, byte[]> iter) {
         return new MeteredWindowedKeyValueIterator<>(
-            wrapped().backwardFindSessions(
-                bytesKeyFrom,
-                bytesKeyTo,
-                earliestSessionEndTime,
-                latestSessionStartTime
-            ),
+            iter,
             fetchSensor,
             iteratorDurationSensor,
             this::deserializeKey,
@@ -447,39 +434,40 @@ public class MeteredSessionStore<K, V>
 
     @SuppressWarnings("unchecked")
     @Override
-    public <R> QueryResult<R> query(final Query<R> query,
-                                    final PositionBound positionBound,
-                                    final QueryConfig config) {
+    public <R> QueryResult<R> query(
+        final Query<R> query,
+        final PositionBound positionBound,
+        final QueryConfig config
+    ) {
         final long start = time.nanoseconds();
         final QueryResult<R> result;
 
-        final QueryHandler handler = queryHandlers.get(query.getClass());
+        final QueryHandler<?> handler = queryHandlers.get(query.getClass());
         if (handler == null) {
             result = wrapped().query(query, positionBound, config);
             if (config.isCollectExecutionInfo()) {
-                result.addExecutionInfo(
-                    "Handled in " + getClass() + " in " + (time.nanoseconds() - start) + "ns");
+                result.addExecutionInfo("Handled in " + getClass() + " in " + (time.nanoseconds() - start) + "ns");
             }
         } else {
-            result = (QueryResult<R>) handler.apply(
+            result = ((QueryHandler<R>) handler).apply(
                 query,
                 positionBound,
                 config,
                 this
             );
             if (config.isCollectExecutionInfo()) {
-                result.addExecutionInfo(
-                    "Handled in " + getClass() + " with serdes "
-                        + serdes + " in " + (time.nanoseconds() - start) + "ns");
+                result.addExecutionInfo("Handled in " + getClass() + " with serdes " + serdes + " in " + (time.nanoseconds() - start) + "ns");
             }
         }
         return result;
     }
 
     @SuppressWarnings("unchecked")
-    private <R> QueryResult<R> runRangeQuery(final Query<R> query,
-                                             final PositionBound positionBound,
-                                             final QueryConfig config) {
+    private <R> QueryResult<R> runRangeQuery(
+        final Query<R> query,
+        final PositionBound positionBound,
+        final QueryConfig config
+    ) {
         final QueryResult<R> result;
         final WindowRangeQuery<K, V> typedQuery = (WindowRangeQuery<K, V>) query;
         if (typedQuery.getKey().isPresent()) {

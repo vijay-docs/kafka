@@ -621,11 +621,14 @@ public class InternalTopologyBuilder {
             throw new TopologyException("A different GlobalStateStore has already been added with the name " + storeName);
         }
 
-        stateFactories.put(storeName, storeFactory);
+        // Reuse existing compatible factory to preserve connectedProcessorNames (KAFKA-20464).
+        if (stateFactory == null || allowOverride) {
+            stateFactories.put(storeName, storeFactory);
+        }
 
         if (processorNames != null) {
             for (final String processorName : processorNames) {
-                Objects.requireNonNull(processorName, "processor cannot not be null");
+                Objects.requireNonNull(processorName, "processor cannot be null");
                 connectProcessorAndStateStore(processorName, storeName);
             }
         }
@@ -1455,6 +1458,18 @@ public class InternalTopologyBuilder {
 
     public String decoratePseudoTopic(final String topic) {
         return decorateTopic(topic);
+    }
+
+    /**
+     * If {@code topic} is an internally-managed topic in this topology (a repartition topic,
+     * a changelog topic, etc.), return the decorated name with the applicationId prefix.
+     * Otherwise return the topic name unchanged.
+     */
+    public String maybeDecorateInternalTopic(final String topic) {
+        if (topic != null && internalTopicNamesWithProperties.containsKey(topic)) {
+            return decorateTopic(topic);
+        }
+        return topic;
     }
 
     @SuppressWarnings("deprecation")

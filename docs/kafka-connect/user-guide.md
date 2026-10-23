@@ -1,6 +1,6 @@
 ---
 title: User Guide
-description: User Guide
+description: Guide to running, configuring, and managing Kafka Connect workers and connectors.
 weight: 2
 tags: ['kafka', 'docs']
 aliases: 
@@ -26,7 +26,7 @@ type: docs
 -->
 
 
-The [quickstart](../getting-started/quickstart) provides a brief example of how to run a standalone version of Kafka Connect. This section describes how to configure, run, and manage Kafka Connect in more detail.
+The [quickstart](../../getting-started/quickstart) provides a brief example of how to run a standalone version of Kafka Connect. This section describes how to configure, run, and manage Kafka Connect in more detail.
 
 ## Running Kafka Connect
 
@@ -65,7 +65,7 @@ Distributed mode handles automatic balancing of work, allows you to scale up (or
 $ bin/connect-distributed.sh config/connect-distributed.properties
 ```
 
-The difference is in the class which is started and the configuration parameters which change how the Kafka Connect process decides where to store configurations, how to assign work, and where to store offsets and task statues. In the distributed mode, Kafka Connect stores the offsets, configs and task statuses in Kafka topics. It is recommended to manually create the topics for offset, configs and statuses in order to achieve the desired the number of partitions and replication factors. If the topics are not yet created when starting Kafka Connect, the topics will be auto created with default number of partitions and replication factor, which may not be best suited for its usage.
+The difference is in the class which is started and the configuration parameters which change how the Kafka Connect process decides where to store configurations, how to assign work, and where to store offsets and task statuses. In the distributed mode, Kafka Connect stores the offsets, configs and task statuses in Kafka topics. It is recommended to manually create the topics for offset, configs and statuses to achieve the desired number of partitions and replication factors. If the topics are not yet created when starting Kafka Connect, the topics will be auto created with default number of partitions and replication factor, which may not be best suited for its usage.
 
 In particular, the following configuration parameters, in addition to the common settings mentioned above, are critical to set before starting your cluster:
 
@@ -618,7 +618,7 @@ Offsets topic used by the connector
 
 This is the value of the `offsets.storage.topic` property in the connector’s configuration if provided,
 
-or the value of the `offsets.storage.topic` property in the worker’s configuration if not.
+or the value of the `offset.storage.topic` property in the worker’s configuration if not.
 </td>
 <td>
 
@@ -686,7 +686,7 @@ the name of the connector
 
 or the value of `consumer.group.id` if present in the Connect configuration,
 
-or the value of `consumer.overrides.group.id` if present in the Connector configuration
+or the value of `consumer.override.group.id` if present in the Connector configuration
 </td><td> </td></tr>
 <tr><td>Read</td><td>Topic</td><td>sink topic(s) that the connector will consume from</td><td>
 

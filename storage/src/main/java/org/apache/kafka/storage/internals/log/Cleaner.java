@@ -19,15 +19,16 @@ package org.apache.kafka.storage.internals.log;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.CorruptRecordException;
+import org.apache.kafka.common.message.AbortedTxn;
 import org.apache.kafka.common.record.internal.FileRecords;
 import org.apache.kafka.common.record.internal.MemoryRecords;
 import org.apache.kafka.common.record.internal.MutableRecordBatch;
 import org.apache.kafka.common.record.internal.Record;
 import org.apache.kafka.common.record.internal.RecordBatch;
-import org.apache.kafka.common.utils.BufferSupplier;
-import org.apache.kafka.common.utils.CloseableIterator;
-import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.common.utils.internals.BufferSupplier;
+import org.apache.kafka.common.utils.internals.CloseableIterator;
+import org.apache.kafka.common.utils.internals.LogContext;
 import org.apache.kafka.storage.internals.utils.Throttler;
 
 import org.slf4j.Logger;
@@ -175,9 +176,8 @@ public class Cleaner {
                 log.config().maxIndexSize,
                 cleanable.firstUncleanableOffset()
         );
-
         for (List<LogSegment> group : groupedSegments) {
-            cleanSegments(log, group, offsetMap, currentTime, stats, transactionMetadata, legacyDeleteHorizonMs, upperBoundOffset);
+            cleanSegments(log, group, offsetMap, currentTime, stats, transactionMetadata, legacyDeleteHorizonMs);
         }
 
         // record buffer utilization
@@ -199,17 +199,15 @@ public class Cleaner {
      * @param transactionMetadata State of ongoing transactions which is carried between the cleaning
      *                            of the grouped segments
      * @param legacyDeleteHorizonMs The delete horizon used for tombstones whose version is less than 2
-     * @param upperBoundOffsetOfCleaningRound The upper bound offset of this round of cleaning
      */
     @SuppressWarnings("finally")
     public void cleanSegments(UnifiedLog log,
-                               List<LogSegment> segments,
-                               OffsetMap map,
-                               long currentTime,
-                               CleanerStats stats,
-                               CleanedTransactionMetadata transactionMetadata,
-                               long legacyDeleteHorizonMs,
-                               long upperBoundOffsetOfCleaningRound) throws IOException {
+                              List<LogSegment> segments,
+                              OffsetMap map,
+                              long currentTime,
+                              CleanerStats stats,
+                              CleanedTransactionMetadata transactionMetadata,
+                              long legacyDeleteHorizonMs) throws IOException {
         // create a new segment with a suffix appended to the name of the log and indexes
         LogSegment cleaned = UnifiedLog.createNewCleanedSegment(log.dir(), log.config(), segments.get(0).baseOffset());
         transactionMetadata.setCleanedIndex(Optional.of(cleaned.txnIndex()));
@@ -227,7 +225,11 @@ public class Cleaner {
                 // Note that it is important to collect aborted transactions from the full log segment
                 // range since we need to rebuild the full transaction index for the new segment.
                 long startOffset = currentSegment.baseOffset();
-                long upperBoundOffset = nextSegmentOpt.map(LogSegment::baseOffset).orElse(currentSegment.readNextOffset());
+                // readNextOffset() is expensive — keep it lazy. orElse() evaluates eagerly,
+                // and orElseGet() can't be used because readNextOffset() throws IOException.
+                long upperBoundOffset = nextSegmentOpt.isPresent()
+                        ? nextSegmentOpt.get().baseOffset()
+                        : currentSegment.readNextOffset();
                 List<AbortedTxn> abortedTransactions = log.collectAbortedTransactions(startOffset, upperBoundOffset);
                 transactionMetadata.addAbortedTransactions(abortedTransactions);
 
@@ -250,9 +252,10 @@ public class Cleaner {
                             log.config().maxMessageSize(),
                             transactionMetadata,
                             lastOffsetOfActiveProducers,
-                            upperBoundOffsetOfCleaningRound,
+                            log.highWatermark(),
                             stats,
-                            currentTime
+                            currentTime,
+                            log.config().maxDecompressedMessageBytes()
                     );
                 } catch (LogSegmentOffsetOverflowException e) {
                     // Split the current segment. It's also safest to abort the current cleaning process, so that we retry from
@@ -299,9 +302,12 @@ public class Cleaner {
      * @param maxLogMessageSize The maximum message size of the corresponding topic
      * @param transactionMetadata The state of ongoing transactions which is carried between the cleaning of the grouped segments
      * @param lastRecordsOfActiveProducers The active producers and its last data offset
-     * @param upperBoundOffsetOfCleaningRound Next offset of the last batch in the source segment
+     * @param highWatermark The high watermark of the log, used to retain the batch whose next offset equals
+     *                      the high watermark so that the last offset information is not lost after cleaning
      * @param stats Collector for cleaning statistics
      * @param currentTime The time at which the clean was initiated
+     * @param maxRecordBodySize The maximum decompressed per-record body size of the corresponding topic; records
+     *                          exceeding it are rejected with an InvalidRecordException before allocation
      */
     private void cleanInto(TopicPartition topicPartition,
                            FileRecords sourceRecords,
@@ -312,9 +318,10 @@ public class Cleaner {
                            int maxLogMessageSize,
                            CleanedTransactionMetadata transactionMetadata,
                            Map<Long, LastRecord> lastRecordsOfActiveProducers,
-                           long upperBoundOffsetOfCleaningRound,
+                           long highWatermark,
                            CleanerStats stats,
-                           long currentTime) throws IOException {
+                           long currentTime,
+                           int maxRecordBodySize) throws IOException {
         MemoryRecords.RecordFilter logCleanerFilter = new MemoryRecords.RecordFilter(currentTime, deleteRetentionMs) {
             private boolean discardBatchRecords;
 
@@ -349,9 +356,9 @@ public class Cleaner {
                 BatchRetention batchRetention;
                 if (batch.hasProducerId() && isBatchLastRecordOfProducer)
                     batchRetention = BatchRetention.RETAIN_EMPTY;
-                else if (batch.nextOffset() == upperBoundOffsetOfCleaningRound) {
-                    // retain the last batch of the cleaning round, even if it's empty, so that last offset information
-                    // is not lost after cleaning.
+                else if (batch.nextOffset() == highWatermark) {
+                    // This is the last batch before the high watermark. Retain it even if empty, so that the last
+                    // offset information is not lost after cleaning.
                     batchRetention = BatchRetention.RETAIN_EMPTY;
                 } else if (discardBatchRecords)
                     batchRetention = BatchRetention.DELETE;
@@ -388,7 +395,7 @@ public class Cleaner {
             sourceRecords.readInto(readBuffer, position);
             MemoryRecords records = MemoryRecords.readableRecords(readBuffer);
             throttler.maybeThrottle(records.sizeInBytes());
-            MemoryRecords.FilterResult result = records.filterTo(logCleanerFilter, writeBuffer, decompressionBufferSupplier);
+            MemoryRecords.FilterResult result = records.filterTo(logCleanerFilter, writeBuffer, decompressionBufferSupplier, maxRecordBodySize);
 
             stats.readMessages(result.messagesRead(), result.bytesRead());
             stats.recopyMessages(result.messagesRetained(), result.bytesRetained());
@@ -669,7 +676,8 @@ public class Cleaner {
                     nextSegmentStartOffset,
                     log.config().maxMessageSize(),
                     transactionMetadata,
-                    stats
+                    stats,
+                    log.config().maxDecompressedMessageBytes()
             );
             if (full) {
                 logger.debug("Offset map is full, {} segments fully mapped, segment with base offset {} is partially mapped",
@@ -691,6 +699,8 @@ public class Cleaner {
      * @param maxLogMessageSize The maximum size in bytes for record allowed
      * @param transactionMetadata The state of ongoing transactions for the log between offset range to build
      * @param stats Collector for cleaning statistics
+     * @param maxRecordBodySize The maximum decompressed per-record body size of the corresponding topic; records
+     *                          exceeding it are rejected with an InvalidRecordException before allocation
      *
      * @return If the map was filled whilst loading from this segment
      */
@@ -701,7 +711,8 @@ public class Cleaner {
                                              long nextSegmentStartOffset,
                                              int maxLogMessageSize,
                                              CleanedTransactionMetadata transactionMetadata,
-                                             CleanerStats stats) throws IOException, DigestException {
+                                             CleanerStats stats,
+                                             int maxRecordBodySize) throws IOException, DigestException {
         int position = segment.offsetIndex().lookup(startOffset).position();
         int maxDesiredMapSize = (int) (map.slots() * dupBufferLoadFactor);
 
@@ -729,7 +740,7 @@ public class Cleaner {
                         // Note that abort markers are supported in v2 and above, which means count is defined.
                         stats.indexMessagesRead(batch.countOrNull());
                     } else {
-                        try (CloseableIterator<Record> recordsIterator = batch.streamingIterator(decompressionBufferSupplier)) {
+                        try (CloseableIterator<Record> recordsIterator = batch.streamingIterator(decompressionBufferSupplier, maxRecordBodySize)) {
                             for (Record record : (Iterable<Record>) () -> recordsIterator) {
                                 if (record.hasKey() && record.offset() >= startOffset) {
                                     if (map.size() < maxDesiredMapSize) {

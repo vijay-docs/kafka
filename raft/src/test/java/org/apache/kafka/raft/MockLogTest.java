@@ -30,15 +30,11 @@ import org.apache.kafka.common.record.internal.Record;
 import org.apache.kafka.common.record.internal.RecordBatch;
 import org.apache.kafka.common.record.internal.Records;
 import org.apache.kafka.common.record.internal.SimpleRecord;
-import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.common.utils.internals.LogContext;
 import org.apache.kafka.server.common.OffsetAndEpoch;
 import org.apache.kafka.snapshot.RawSnapshotReader;
 import org.apache.kafka.snapshot.RawSnapshotWriter;
-
-import net.jqwik.api.AfterFailureMode;
-import net.jqwik.api.ForAll;
-import net.jqwik.api.Property;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +44,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ArgumentsSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -454,20 +449,20 @@ public class MockLogTest {
         assertEquals(previousEndOffset, log.endOffset().offset());
     }
 
-    @Property(tries = 100, afterFailure = AfterFailureMode.SAMPLE_ONLY)
-    void testRandomRecords(
-        @ForAll(supplier = ArbitraryMemoryRecords.class) MemoryRecords records
-    ) {
-        try (MockLog log = new MockLog(topicPartition, topicId, new LogContext())) {
-            long previousEndOffset = log.endOffset().offset();
+    @Test
+    void testRandomRecords() {
+        ArbitraryMemoryRecords.forRandomRecords(100, records -> {
+            try (MockLog log = new MockLog(topicPartition, topicId, new LogContext())) {
+                long previousEndOffset = log.endOffset().offset();
 
-            assertThrows(
-                CorruptRecordException.class,
-                () -> log.appendAsFollower(records, Integer.MAX_VALUE)
-            );
+                assertThrows(
+                    CorruptRecordException.class,
+                    () -> log.appendAsFollower(records, Integer.MAX_VALUE)
+                );
 
-            assertEquals(previousEndOffset, log.endOffset().offset());
-        }
+                assertEquals(previousEndOffset, log.endOffset().offset());
+            }
+        });
     }
 
     @Test
@@ -1134,7 +1129,7 @@ public class MockLogTest {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2})
-    public void testReadRespectsMaxSizeInBytes(int expectedBatches) throws IOException {
+    public void testReadRespectsMaxSizeInBytes(int expectedBatches) {
         int recordsPerBatch = 5;
         appendBatch(recordsPerBatch, 1);
         appendBatch(recordsPerBatch, 1);
@@ -1211,7 +1206,7 @@ public class MockLogTest {
                 log.endOffset().offset(),
                 Compression.NONE,
                 epoch,
-                records.toArray(new SimpleRecord[records.size()])
+                records.toArray(new SimpleRecord[0])
             ),
             epoch
         );

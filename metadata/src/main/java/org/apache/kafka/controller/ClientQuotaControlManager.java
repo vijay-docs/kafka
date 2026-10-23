@@ -25,7 +25,7 @@ import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.quota.ClientQuotaAlteration;
 import org.apache.kafka.common.quota.ClientQuotaEntity;
 import org.apache.kafka.common.requests.ApiError;
-import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.internals.LogContext;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
 import org.apache.kafka.server.config.QuotaConfig;
 import org.apache.kafka.server.mutable.BoundedList;
@@ -255,6 +255,9 @@ public class ClientQuotaControlManager {
         ConfigDef.ConfigKey configKey = validKeys.get(key);
         if (configKey == null) {
             return new ApiError(Errors.INVALID_REQUEST, "Invalid configuration key " + key);
+        }
+        if (!Double.isFinite(value)) {
+            return new ApiError(Errors.INVALID_REQUEST, "Quota " + key + " must be a finite number");
         }
         if (value <= 0.0) {
             return new ApiError(Errors.INVALID_REQUEST, "Quota " + key + " must be greater than 0");
