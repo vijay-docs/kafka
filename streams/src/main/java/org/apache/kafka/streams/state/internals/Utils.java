@@ -20,7 +20,7 @@ import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.LongDeserializer;
-import org.apache.kafka.common.utils.ByteUtils;
+import org.apache.kafka.common.utils.internals.ByteUtils;
 import org.apache.kafka.streams.state.StateSerdes;
 
 import java.nio.ByteBuffer;
@@ -104,6 +104,89 @@ public class Utils {
 
         final byte[] result = new byte[buffer.remaining()];
         buffer.get(result);
+        return result;
+    }
+
+    /**
+     * Build a serialized ValueTimestampHeaders with empty headers from a plain value and a timestamp.
+     * This is the inverse of {@link #rawPlainValue(byte[])} for the empty-headers case.
+     *
+     * Format conversion:
+     * Input:  [value], timestamp
+     * Output: [headersSize(varint)=0][timestamp(8)][value]
+     */
+    public static byte[] rawValueTimestampHeaders(final byte[] rawPlainValue, final long timestamp) {
+        return rawValueTimestampHeaders(rawPlainValue, timestamp, null);
+    }
+
+    /**
+     * Build a serialized ValueTimestampHeaders from a plain value, a timestamp and headers.
+     * This is the inverse of {@link #rawPlainValue(byte[])}.
+     *
+     * Format conversion:
+     * Input:  [value], timestamp, headers
+     * Output: [headersSize(varint)][headers][timestamp(8)][value]
+     */
+    public static byte[] rawValueTimestampHeaders(final byte[] rawPlainValue,
+                                                  final long timestamp,
+                                                  final Headers headers) {
+        if (rawPlainValue == null) {
+            return null;
+        }
+
+        final HeadersSerializer.PreSerializedHeaders preSerializedHeaders = HeadersSerializer.prepareSerialization(headers);
+        final ByteBuffer buffer = ByteBuffer.allocate(
+            ByteUtils.sizeOfVarint(preSerializedHeaders.requiredBufferSizeForHeaders)
+                + preSerializedHeaders.requiredBufferSizeForHeaders
+                + StateSerdes.TIMESTAMP_SIZE
+                + rawPlainValue.length);
+        ByteUtils.writeVarint(preSerializedHeaders.requiredBufferSizeForHeaders, buffer);
+        return HeadersSerializer.serialize(preSerializedHeaders, buffer)
+            .putLong(timestamp)
+            .put(rawPlainValue)
+            .array();
+    }
+
+    /**
+     * Extract the headers-and-timestamp prefix of a serialized ValueTimestampHeaders, i.e. exactly
+     * the part that {@link #rawPlainValue(byte[])} strips off. Splitting a value this way lets the
+     * plain value bytes and their headers/timestamp be stored or transmitted separately and then
+     * recombined with {@link #rawValueTimestampHeaders(byte[], byte[])}.
+     *
+     * Format conversion:
+     * Input:  [headersSize(varint)][headers][timestamp(8)][value]
+     * Output: [headersSize(varint)][headers][timestamp(8)]
+     */
+    public static byte[] rawHeadersTimestampPrefix(final byte[] rawValueTimestampHeaders) {
+        if (rawValueTimestampHeaders == null) {
+            return null;
+        }
+
+        final ByteBuffer buffer = ByteBuffer.wrap(rawValueTimestampHeaders);
+        final int headersSize = ByteUtils.readVarint(buffer);
+        final int prefixLength = buffer.position() + headersSize + StateSerdes.TIMESTAMP_SIZE;
+
+        final byte[] prefix = new byte[prefixLength];
+        System.arraycopy(rawValueTimestampHeaders, 0, prefix, 0, prefixLength);
+        return prefix;
+    }
+
+    /**
+     * Rebuild a serialized ValueTimestampHeaders from a prefix produced by
+     * {@link #rawHeadersTimestampPrefix(byte[])} and the plain value bytes it was split from.
+     *
+     * Format conversion:
+     * Input:  [headersSize(varint)][headers][timestamp(8)], [value]
+     * Output: [headersSize(varint)][headers][timestamp(8)][value]
+     */
+    public static byte[] rawValueTimestampHeaders(final byte[] rawHeadersTimestampPrefix, final byte[] rawPlainValue) {
+        if (rawPlainValue == null) {
+            return null;
+        }
+
+        final byte[] result = new byte[rawHeadersTimestampPrefix.length + rawPlainValue.length];
+        System.arraycopy(rawHeadersTimestampPrefix, 0, result, 0, rawHeadersTimestampPrefix.length);
+        System.arraycopy(rawPlainValue, 0, result, rawHeadersTimestampPrefix.length, rawPlainValue.length);
         return result;
     }
 

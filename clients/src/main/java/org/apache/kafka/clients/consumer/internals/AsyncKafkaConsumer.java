@@ -106,15 +106,14 @@ import org.apache.kafka.common.requests.ListOffsetsRequest;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.telemetry.internals.ClientTelemetryReporter;
 import org.apache.kafka.common.telemetry.internals.ClientTelemetryUtils;
-import org.apache.kafka.common.utils.AppInfoParser;
-import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Timer;
+import org.apache.kafka.common.utils.internals.AppInfoParser;
+import org.apache.kafka.common.utils.internals.LogContext;
 
 import org.slf4j.Logger;
 import org.slf4j.event.Level;
 
-import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
@@ -148,6 +147,7 @@ import static org.apache.kafka.clients.consumer.internals.AbstractMembershipMana
 import static org.apache.kafka.clients.consumer.internals.ConsumerRebalanceListenerMethodName.ON_PARTITIONS_ASSIGNED;
 import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.CONSUMER_JMX_PREFIX;
 import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.CONSUMER_METRIC_GROUP;
+import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.CONSUMER_METRIC_GROUP_PREFIX;
 import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.DEFAULT_CLOSE_TIMEOUT_MS;
 import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.THROW_ON_FETCH_STABLE_OFFSET_UNSUPPORTED;
 import static org.apache.kafka.clients.consumer.internals.ConsumerUtils.configuredConsumerInterceptors;
@@ -364,6 +364,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     private final ApplicationEventHandler applicationEventHandler;
     private final Time time;
     private final AtomicReference<Optional<ConsumerGroupMetadata>> groupMetadata = new AtomicReference<>(Optional.empty());
+    private final FetchMetricsManager fetchMetricsManager;
+    private final RebalanceCallbackMetricsManager rebalanceCallbackMetricsManager;
     private final AsyncConsumerMetrics asyncConsumerMetrics;
     private final KafkaConsumerMetrics kafkaConsumerMetrics;
     private Logger log;
@@ -417,6 +419,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     private final AtomicInteger refCount = new AtomicInteger(0);
 
+    private volatile boolean hasPendingReconciliation = false;
+
     private final MemberStateListener memberStateListener = new MemberStateListener() {
         @Override
         public void onMemberEpochUpdated(Optional<Integer> memberEpoch, String memberId) {
@@ -426,6 +430,11 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         @Override
         public void onGroupAssignmentUpdated(Set<TopicPartition> partitions) {
             setGroupAssignmentSnapshot(partitions);
+        }
+
+        @Override
+        public void onMemberStateChange(MemberState memberState) {
+            setHasPendingReconciliation(memberState == MemberState.RECONCILING);
         }
     };
 
@@ -490,10 +499,10 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     interceptorList,
                     Arrays.asList(deserializers.keyDeserializer(), deserializers.valueDeserializer()));
             this.metadata = metadataFactory.build(config, subscriptions, logContext, clusterResourceListeners);
-            final List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config);
-            metadata.bootstrap(addresses);
+            ClientUtils.maybeBootstrapMetadataSynchronously(config,
+                config.getList(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG), this.metadata);
 
-            FetchMetricsManager fetchMetricsManager = createFetchMetricsManager(metrics);
+            this.fetchMetricsManager = createFetchMetricsManager(metrics);
             FetchConfig fetchConfig = new FetchConfig(config);
             this.isolationLevel = fetchConfig.isolationLevel;
 
@@ -556,11 +565,12 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                     requestManagersSupplier,
                     asyncConsumerMetrics
             );
+            this.rebalanceCallbackMetricsManager = new RebalanceCallbackMetricsManager(metrics);
             this.rebalanceListenerInvoker = new ConsumerRebalanceListenerInvoker(
                     logContext,
                     subscriptions,
                     time,
-                    new RebalanceCallbackMetricsManager(metrics)
+                    rebalanceCallbackMetricsManager
             );
             this.streamsRebalanceListenerInvoker = streamsRebalanceData.map(s ->
                 new StreamsRebalanceListenerInvoker(logContext, s));
@@ -600,6 +610,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
                        Deserializers<K, V> deserializers,
                        FetchBuffer fetchBuffer,
                        FetchCollector<K, V> fetchCollector,
+                       FetchMetricsManager fetchMetricsManager,
+                       RebalanceCallbackMetricsManager rebalanceCallbackMetricsManager,
                        ConsumerInterceptors<K, V> interceptors,
                        Time time,
                        ApplicationEventHandler applicationEventHandler,
@@ -620,6 +632,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         this.clientId = clientId;
         this.fetchBuffer = fetchBuffer;
         this.fetchCollector = fetchCollector;
+        this.fetchMetricsManager = fetchMetricsManager;
+        this.rebalanceCallbackMetricsManager = rebalanceCallbackMetricsManager;
         this.isolationLevel = IsolationLevel.READ_UNCOMMITTED;
         this.interceptors = Objects.requireNonNull(interceptors);
         this.time = time;
@@ -673,8 +687,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         this.deserializers = new Deserializers<>(keyDeserializer, valueDeserializer, metrics);
         this.clientTelemetryReporter = Optional.empty();
 
-        ConsumerMetrics metricsRegistry = new ConsumerMetrics();
-        FetchMetricsManager fetchMetricsManager = new FetchMetricsManager(metrics, metricsRegistry.fetcherMetrics);
+        FetchMetricsRegistry fetchMetricsRegistry = new FetchMetricsRegistry(CONSUMER_METRIC_GROUP_PREFIX);
+        this.fetchMetricsManager = new FetchMetricsManager(metrics, fetchMetricsRegistry);
         this.fetchCollector = new FetchCollector<>(logContext,
                 metadata,
                 subscriptions,
@@ -699,11 +713,12 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             time,
             asyncConsumerMetrics
         );
+        this.rebalanceCallbackMetricsManager = new RebalanceCallbackMetricsManager(metrics);
         this.rebalanceListenerInvoker = new ConsumerRebalanceListenerInvoker(
             logContext,
             subscriptions,
             time,
-            new RebalanceCallbackMetricsManager(metrics)
+            rebalanceCallbackMetricsManager
         );
         ApiVersions apiVersions = new ApiVersions();
         this.positionsValidator = new PositionsValidator(logContext, time, subscriptions, metadata);
@@ -864,6 +879,10 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         groupAssignmentSnapshot.set(Collections.unmodifiableSet(partitions));
     }
 
+    void setHasPendingReconciliation(final boolean hasPendingReconciliation) {
+        this.hasPendingReconciliation = hasPendingReconciliation;
+    }
+
     @Override
     public void registerMetricForSubscription(KafkaMetric metric) {
         if (!metrics().containsKey(metric.metricName())) {
@@ -962,15 +981,20 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
     }
 
     /**
-     * {@code checkInflightPoll()} manages the lifetime of the {@link AsyncPollEvent} processing. If it is
-     * called when no event is currently processing, it will start a new event processing asynchronously. A check
-     * is made during each invocation to see if the <em>inflight</em> event has completed. If it has, it will be
-     * processed accordingly.
+     * {@code checkInflightPoll()} manages the lifecycle of the {@link AsyncPollEvent}. If no event is
+     * currently processing, a new one is started asynchronously. Each invocation checks whether the
+     * <em>inflight</em> event has completed; if so, a new event is submitted in its place so a fetch request
+     * stays in flight. If the completed event left records buffered no new
+     * event is submitted here (it would gate those records behind a fresh validate-positions stage).
+     * Instead the buffered records are returned and the next fetch is pipelined by {@link #poll(Duration)} via
+     * {@link #sendPrefetches(Timer)}.
      */
     private void checkInflightPoll(Timer timer, boolean firstPass) {
-        if (firstPass && inflightPoll != null) {
-            // Handle the case where there's a remaining inflight poll from the *previous* invocation
-            // of AsyncKafkaConsumer.poll().
+        // Clear the current inflight poll if we can, so a new one (and a new fetch) is submitted below.
+        // On the first pass this may clear a leftover from the previous poll(). On later passes it clears
+        // inflights that have completed. A completed poll that filled the buffer is kept, so its records
+        // are returned first (see maybeClearPreviousInflightPoll).
+        if (inflightPoll != null && (firstPass || inflightPoll.isComplete())) {
             maybeClearPreviousInflightPoll();
         }
 
@@ -1649,6 +1673,8 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         closeQuietly(interceptors, "consumer interceptors", firstException);
         closeQuietly(kafkaConsumerMetrics, "kafka consumer metrics", firstException);
         closeQuietly(asyncConsumerMetrics, "async consumer metrics", firstException);
+        closeQuietly(fetchMetricsManager, "consumer fetch metrics", firstException);
+        closeQuietly(rebalanceCallbackMetricsManager, "consumer rebalance callback metrics");
         closeQuietly(metrics, "consumer metrics", firstException);
         closeQuietly(deserializers, "consumer deserializers", firstException);
         clientTelemetryReporter.ifPresent(reporter -> closeQuietly(reporter, "async consumer telemetry reporter", firstException));
@@ -1958,28 +1984,29 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             return fetch;
         }
 
-        long pollTimeout = isCommittedOffsetsManagementEnabled()
-                ? Math.min(applicationEventHandler.maximumTimeToWait(), timer.remainingMs())
-                : timer.remainingMs();
-        // With the non-blocking poll design, it's possible that at this point the background thread is
-        // concurrently working to update positions. Therefore, a _copy_ of the current assignment is retrieved
-        // and iterated looking for any partitions with invalid positions. This is done to avoid being stuck
-        // in poll for an unnecessarily long amount of time if we are missing some positions since the offset
-        // lookup may be backing off after a failure.
-        if (pollTimeout > retryBackoffMs) {
-            Set<TopicPartition> partitions = subscriptions.assignedPartitions();
+        long pollTimeout = Math.min(applicationEventHandler.maximumTimeToWait(), timer.remainingMs());
 
-            if (partitions.isEmpty()) {
-                // If there aren't any assigned partitions, this could mean that this consumer's group membership
-                // has not been established or assignments have been removed and not yet reassigned. In either case,
-                // reduce the poll time for the fetch buffer wait.
+        // Bound the wait when background progress may make fetching possible soon.
+        // Use the current application-thread state to avoid relying on stale state from the network thread.
+        if (pollTimeout > retryBackoffMs) {
+            if (subscriptions.numAssignedPartitions() == 0) {
+                // If there are no assigned partitions, reduce the fetch buffer wait time. This may happen when
+                // group membership has not been established yet, assignments have been revoked but not reassigned,
+                // bootstrap DNS resolution is still in progress, or manual assignment has not happened yet.
+                pollTimeout = retryBackoffMs;
+            } else if (!subscriptions.hasAllFetchPositions()) {
+                // If some partitions do not have valid positions, the background thread may still be resolving them,
+                // for example by fetching committed offsets, looking up offsets by timestamp, or backing off after a
+                // failure. Reduce the wait time so the application thread can consume data promptly once positions are
+                // resolved.
                 pollTimeout = retryBackoffMs;
             } else {
-                for (TopicPartition tp : partitions) {
-                    if (!subscriptions.hasValidPosition(tp)) {
-                        pollTimeout = retryBackoffMs;
-                        break;
-                    }
+                Set<TopicPartition> buffered = fetchBuffer.bufferedPartitions();
+                if (subscriptions.hasFetchablePartitions(tp -> !buffered.contains(tp))) {
+                    // If any fetchable partition has no buffered data, it may have been skipped due to reconnect
+                    // backoff, an in-flight request, or a missing leader. Bound the wait so the application thread
+                    // can retry once the condition clears.
+                    pollTimeout = retryBackoffMs;
                 }
             }
         }
@@ -2017,7 +2044,7 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         // This is key because partitions may need revocation, so we need to wait for the reconciliation check
         // that triggers commits and marks partitions as pending revocation, before we can
         // safely collect records from the buffer.
-        if (inflightPoll != null && !inflightPoll.isReconciliationCheckComplete()) {
+        if (hasPendingReconciliation && inflightPoll != null && !inflightPoll.isReconciliationCheckComplete()) {
             // If the background hasn't had the time to check for pending reconciliation,
             // we need to wait for that check before moving on (instead of returning empty right away,
             // which will lead to blocking on buffer data)
@@ -2074,15 +2101,6 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
             wakeupTrigger.clearTask();
         }
         return true;
-    }
-
-    /**
-     *
-     * Indicates if the consumer is using the Kafka-based offset management strategy,
-     * according to config {@link CommonClientConfigs#GROUP_ID_CONFIG}
-     */
-    private boolean isCommittedOffsetsManagementEnabled() {
-        return groupMetadata.get().isPresent();
     }
 
     /**
@@ -2181,6 +2199,13 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
         if (this.closed) {
             release();
             throw new IllegalStateException("This consumer has already been closed.");
+        }
+
+        try {
+            metadata.maybeThrowBootstrapFatalException();
+        } catch (RuntimeException e) {
+            release();
+            throw e;
         }
     }
 
@@ -2386,7 +2411,6 @@ public class AsyncKafkaConsumer<K, V> implements ConsumerDelegate<K, V> {
      *
      * Each iteration gives the application thread an opportunity to process background events, which may be
      * necessary to complete the overall processing.
-     *
      * <p/>
      *
      * As an example, take {@link #unsubscribe()}. To start unsubscribing, the application thread enqueues an

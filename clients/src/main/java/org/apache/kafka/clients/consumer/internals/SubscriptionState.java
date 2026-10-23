@@ -28,7 +28,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.internals.PartitionStates;
 import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.EpochEndOffset;
-import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.internals.LogContext;
 
 import org.slf4j.Logger;
 
@@ -496,6 +496,17 @@ public class SubscriptionState {
         return result;
     }
 
+    public synchronized boolean hasFetchablePartitions(Predicate<TopicPartition> isAvailable) {
+        for (Map.Entry<TopicPartition, TopicPartitionState> entry : assignment.partitionStateMap().entrySet()) {
+            TopicPartition topicPartition = entry.getKey();
+            if ((subscriptionType.equals(SubscriptionType.AUTO_TOPICS_SHARE) || isFetchableAndSubscribed(topicPartition, entry.getValue()))
+                    && isAvailable.test(topicPartition)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Check if the partition is fetchable.
      * If the consumer has explicitly subscribed to a list of topic names,
@@ -900,16 +911,6 @@ public class SubscriptionState {
         });
 
         return result;
-    }
-
-    public synchronized boolean hasPartitionsNeedingValidation(long nowMs) {
-        for (TopicPartitionState tps  : assignment.partitionStateValues()) {
-            if (tps.awaitingValidation() && !tps.awaitingRetryBackoff(nowMs) && tps.position != null) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     public synchronized boolean isAssigned(TopicPartition tp) {

@@ -78,7 +78,7 @@ import org.apache.kafka.common.metadata.UnregisterBrokerRecord;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AlterPartitionRequest;
 import org.apache.kafka.common.requests.ApiError;
-import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.internals.LogContext;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistration;
@@ -1211,7 +1211,7 @@ public class ReplicationControlManager {
     }
 
     /**
-     * Validates that a batch of topics will create less than {@value MAX_PARTITIONS_PER_BATCH}. Exceeding this number of topics per batch
+     * Validates that a batch of topics will create at most {@value MAX_PARTITIONS_PER_BATCH}. Exceeding this number of topics per batch
      * has led to out-of-memory exceptions. We use this validation to fail earlier to avoid allocating the memory.
      * Validates an upper bound number of partitions. The actual number may be smaller if some topics are misconfigured.
      *
@@ -1220,7 +1220,7 @@ public class ReplicationControlManager {
      * @throws PolicyViolationException if total number of partitions exceeds {@value MAX_PARTITIONS_PER_BATCH}.
      */
     static void validateTotalNumberOfPartitions(CreateTopicsRequestData request, int defaultNumPartitions) {
-        int totalPartitions = 0;
+        long totalPartitions = 0;
         for (CreatableTopic topic: request.topics()) {
             if (topic.assignments().isEmpty()) {
                 if (topic.numPartitions() == -1) {
@@ -1231,10 +1231,39 @@ public class ReplicationControlManager {
             } else {
                 totalPartitions += topic.assignments().size();
             }
-
+            if (totalPartitions > MAX_PARTITIONS_PER_BATCH) {
+                throw new PolicyViolationException("Excessively large number of partitions per request.");
+            }
         }
-        if (totalPartitions > MAX_PARTITIONS_PER_BATCH) {
-            throw new PolicyViolationException("Excessively large number of partitions per request.");
+    }
+
+    /**
+     * Validates that a batch of partition changes will create at most {@value MAX_PARTITIONS_PER_BATCH} additional partitions.
+     *
+     * @param topicsToCreate a batch of new partitions to create.
+     *
+     * @throws PolicyViolationException if total number of partitions exceeds {@value MAX_PARTITIONS_PER_BATCH}.
+     */
+    void validateTotalNumberOfPartitions(List<CreatePartitionsTopic> topicsToCreate) {
+        long totalAdditionalPartitions = 0;
+        for (CreatePartitionsTopic topic : topicsToCreate) {
+            if (topic.count() < 0) {
+                continue;
+            }
+            Uuid topicId = this.topicsByName.get(topic.name());
+            if (topicId == null) {
+                continue;
+            }
+            int additionalPartitions = topic.count() - topics.get(topicId).parts.size();
+            if (additionalPartitions <= 0) {
+                continue;
+            }
+            totalAdditionalPartitions += additionalPartitions;
+            if (totalAdditionalPartitions > MAX_PARTITIONS_PER_BATCH) {
+                throw new PolicyViolationException(
+                    "Excessively large number of additional partitions per request."
+                );
+            }
         }
     }
 
@@ -1883,6 +1912,7 @@ public class ReplicationControlManager {
         ControllerRequestContext context,
         List<CreatePartitionsTopic> topics
     ) {
+        validateTotalNumberOfPartitions(topics);
         List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
         List<CreatePartitionsTopicResult> results = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
         for (CreatePartitionsTopic topic : topics) {
@@ -2015,6 +2045,10 @@ public class ReplicationControlManager {
                 throw new InvalidReplicaAssignmentException("The manual partition " +
                     "assignment includes broker " + brokerId + ", but no such broker is " +
                     "registered.");
+            }
+            if (!clusterControl.brokerRegistrations().get(brokerId).hasUncordonedDirs()) {
+                throw new InvalidReplicaAssignmentException("The manual partition " +
+                    "assignment includes broker " + brokerId + ", but all its log directories are cordoned.");
             }
             if (brokerId.equals(prevBrokerId)) {
                 throw new InvalidReplicaAssignmentException("The manual partition " +

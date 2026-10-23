@@ -21,7 +21,6 @@ import java.util
 import java.util.{Collections, Properties}
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.locks.ReentrantReadWriteLock
-import kafka.log.LogManager
 import kafka.network.DataPlaneAcceptor
 import kafka.raft.KafkaRaftManager
 import kafka.server.DynamicBrokerConfig._
@@ -32,26 +31,27 @@ import org.apache.kafka.common.metadata.{ConfigRecord, MetadataRecordType}
 import org.apache.kafka.common.metrics.{Metrics, MetricsReporter}
 import org.apache.kafka.common.network.{ListenerName, ListenerReconfigurable}
 import org.apache.kafka.common.security.authenticator.LoginManager
-import org.apache.kafka.common.utils.LogContext
-import org.apache.kafka.common.utils.{BufferSupplier, ConfigUtils, Utils}
-import org.apache.kafka.config
+import org.apache.kafka.common.utils.internals.LogContext
+import org.apache.kafka.common.utils.internals.BufferSupplier
+import org.apache.kafka.common.utils.Utils
+import org.apache.kafka.common.utils.internals.ConfigUtils
 import org.apache.kafka.network.SocketServer
-import org.apache.kafka.raft.KafkaRaftClient
+import org.apache.kafka.raft.{KRaftConfigs, KafkaRaftClient}
 import org.apache.kafka.server.{DynamicThreadPool, ProcessRole}
 import org.apache.kafka.server.common.{ApiMessageAndVersion, DirectoryEventHandler}
-import org.apache.kafka.server.config.{DynamicConfig, DynamicProducerStateManagerConfig, ServerConfigs, ServerLogConfigs, DynamicBrokerConfig => JDynamicBrokerConfig}
+import org.apache.kafka.server.config.{BrokerReconfigurable => JBrokerReconfigurable, DynamicConfig, DynamicProducerStateManagerConfig, ServerConfigs, ServerLogConfigs, DynamicBrokerConfig => JDynamicBrokerConfig}
 import org.apache.kafka.server.log.remote.storage.RemoteLogManagerConfig
 import org.apache.kafka.server.metrics.{ClientTelemetryExporterPlugin, MetricConfigs}
+import org.apache.kafka.server.quota.QuotaFactory
 import org.apache.kafka.server.telemetry.{ClientTelemetry, ClientTelemetryExporterProvider}
 import org.apache.kafka.server.util.LockUtils.{inReadLock, inWriteLock}
 import org.apache.kafka.snapshot.RecordsSnapshotReader
-import org.apache.kafka.storage.internals.log.LogConfig
+import org.apache.kafka.storage.internals.log.{LogConfig, LogManager}
 
 import java.util.stream.Collectors
 import scala.util.Using
 import scala.collection._
 import scala.jdk.CollectionConverters._
-import scala.jdk.OptionConverters.RichOption
 
 /**
   * Dynamic broker configurations may be defined at two levels:
@@ -231,7 +231,7 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
     reconfigurables.add(reconfigurable)
   }
 
-  def addBrokerReconfigurable(reconfigurable: config.BrokerReconfigurable): Unit = {
+  def addBrokerReconfigurable(reconfigurable: JBrokerReconfigurable): Unit = {
     verifyReconfigurableConfigs(reconfigurable.reconfigurableConfigs)
     brokerReconfigurables.add(new BrokerReconfigurable {
       override def reconfigurableConfigs: util.Set[String] = reconfigurable.reconfigurableConfigs
@@ -310,7 +310,7 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
         r match {
           case reconfigurable: ListenerReconfigurable =>
             val kafkaProps = validatedKafkaProps(newProps, perBrokerConfig = true)
-            val newConfig = new KafkaConfig(kafkaProps.asJava, false)
+            val newConfig = KafkaConfig(kafkaProps.asJava, doLog = false, enforceProviderAllowlist = true)
             processListenerReconfigurable(reconfigurable, newConfig, Collections.emptyMap(), validateOnly = false, reloadOnly = true)
           case reconfigurable =>
             trace(s"Files will not be reloaded without config change for $reconfigurable")
@@ -348,7 +348,7 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
    */
   private def validatedKafkaProps(propsOverride: Properties, perBrokerConfig: Boolean): Map[String, String] = {
     val propsResolved = JDynamicBrokerConfig.resolveVariableConfigs(propsOverride)
-    JDynamicBrokerConfig.validateConfigs(propsResolved, perBrokerConfig)
+    JDynamicBrokerConfig.validateConfigs(propsOverride, propsResolved, perBrokerConfig)
     val newProps = mutable.Map[String, String]()
     newProps ++= staticBrokerConfigs
     if (perBrokerConfig) {
@@ -431,7 +431,15 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
     newProps ++= staticBrokerConfigs
     overrideProps(newProps, dynamicDefaultConfigs)
     overrideProps(newProps, dynamicBrokerConfigs)
-    KafkaConfig.clampDynamicConfigs(newProps.asJava)
+    // The 2-arg AbstractConfig ctor used for clamping enforces org.apache.kafka.automatic.config.providers.
+    // That allowlist is meant to gate providers supplied via dynamic config changes, not ones already
+    // declared in server.properties, which are trusted regardless of it. Without this exclusion, a
+    // statically-declared provider plus a restrictive allowlist would reject every dynamic config
+    // update below, not just provider-related ones.
+    val propsForClamping = new java.util.HashMap[String, String](newProps.asJava)
+    propsForClamping.keySet().removeIf(k => k.startsWith("config.providers"))
+    KafkaConfig.clampDynamicConfigs(propsForClamping)
+    propsForClamping.forEach((k, v) => newProps(k) = v)
 
     val oldConfig = currentConfig
     val (newConfig, brokerReconfigurablesToUpdate) = processReconfiguration(newProps, validateOnly = false, doLog)
@@ -445,7 +453,7 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
   }
 
   private def processReconfiguration(newProps: Map[String, String], validateOnly: Boolean, doLog: Boolean = false): (KafkaConfig, List[BrokerReconfigurable]) = {
-    val newConfig = new KafkaConfig(newProps.asJava, doLog)
+    val newConfig = KafkaConfig(newProps.asJava, doLog, enforceProviderAllowlist = true)
     val (changeMap, deletedKeySet) = updatedConfigs(newConfig.originalsFromThisConfig, currentConfig.originals)
     if (changeMap.nonEmpty || deletedKeySet.nonEmpty) {
       try {
@@ -527,7 +535,7 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
 }
 
 /**
- * Implement [[config.BrokerReconfigurable]] instead.
+ * Implement [[JBrokerReconfigurable]] instead.
  */
 trait BrokerReconfigurable {
 
@@ -579,6 +587,28 @@ class DynamicLogConfig(logManager: LogManager, directoryEventHandler: DirectoryE
       }
     }
 
+    def validateLogRemoteCopyLagMs(): Unit = {
+      val logRetentionMs: Long = newConfig.logRetentionTimeMillis
+      val logLocalRetentionMs = newConfig.remoteLogManagerConfig.logLocalRetentionMs
+      val effectiveLocalRetentionMs = if (logLocalRetentionMs == -2L) logRetentionMs else logLocalRetentionMs
+      val logRemoteCopyLagMs = newConfig.remoteLogManagerConfig.logRemoteCopyLagMs
+      if (logRemoteCopyLagMs > 0L && effectiveLocalRetentionMs >= 0L && logRemoteCopyLagMs > effectiveLocalRetentionMs) {
+        throw new ConfigException(RemoteLogManagerConfig.LOG_REMOTE_COPY_LAG_MS_PROP, logRemoteCopyLagMs,
+          s"Value must not exceed ${RemoteLogManagerConfig.LOG_LOCAL_RETENTION_MS_PROP} (effective value: $effectiveLocalRetentionMs)")
+      }
+    }
+
+    def validateLogRemoteCopyLagBytes(): Unit = {
+      val logRetentionBytes: Long = newConfig.logRetentionBytes
+      val logLocalRetentionBytes = newConfig.remoteLogManagerConfig.logLocalRetentionBytes
+      val effectiveLocalRetentionBytes = if (logLocalRetentionBytes == -2L) logRetentionBytes else logLocalRetentionBytes
+      val logRemoteCopyLagBytes = newConfig.remoteLogManagerConfig.logRemoteCopyLagBytes
+      if (logRemoteCopyLagBytes > 0L && effectiveLocalRetentionBytes >= 0L && logRemoteCopyLagBytes > effectiveLocalRetentionBytes) {
+        throw new ConfigException(RemoteLogManagerConfig.LOG_REMOTE_COPY_LAG_BYTES_PROP, logRemoteCopyLagBytes,
+          s"Value must not exceed ${RemoteLogManagerConfig.LOG_LOCAL_RETENTION_BYTES_PROP} (effective value: $effectiveLocalRetentionBytes)")
+      }
+    }
+
     def validateCordonedLogDirs(): Unit = {
       val logDirs = newConfig.logDirs()
       val cordonedLogDirs = newConfig.cordonedLogDirs()
@@ -592,12 +622,14 @@ class DynamicLogConfig(logManager: LogManager, directoryEventHandler: DirectoryE
 
     validateLogLocalRetentionMs()
     validateLogLocalRetentionBytes()
+    validateLogRemoteCopyLagMs()
+    validateLogRemoteCopyLagBytes()
     validateCordonedLogDirs()
   }
 
   private def updateLogsConfig(newBrokerDefaults: Map[String, Object]): Unit = {
     logManager.brokerConfigUpdated()
-    logManager.allLogs.foreach { log =>
+    logManager.allLogs.forEach { log =>
       val props = mutable.Map.empty[Any, Any]
       props ++= newBrokerDefaults
       props ++= log.config.originals.asScala.filter { case (k, _) =>
@@ -614,9 +646,9 @@ class DynamicLogConfig(logManager: LogManager, directoryEventHandler: DirectoryE
     logManager.reconfigureDefaultLogConfig(new LogConfig(newBrokerDefaults))
     updateLogsConfig(newBrokerDefaults.asScala)
 
-    logManager.updateCordonedLogDirs(newConfig.cordonedLogDirs.asScala.toSet)
+    logManager.updateCordonedLogDirs(util.Set.copyOf(newConfig.cordonedLogDirs))
     directoryEventHandler.handleCordoned(newConfig.cordonedLogDirs.stream
-      .flatMap[Uuid](dir => logManager.directoryId(dir).toJava.stream)
+      .flatMap[Uuid](dir => logManager.directoryId(dir).stream)
       .collect(Collectors.toSet[Uuid]))
   }
 }
@@ -717,7 +749,11 @@ class DynamicMetricsReporters(brokerId: Int, config: KafkaConfig, metrics: Metri
 
 class DynamicMetricReporterState(brokerId: Int, config: KafkaConfig, metrics: Metrics, clusterId: String) {
   private[server] val dynamicConfig = config.dynamicConfig
-  private val propsOverride = Map[String, AnyRef](ServerConfigs.BROKER_ID_CONFIG -> brokerId.toString)
+  // broker.id will no longer be passed from 5.0 (KIP-1232).
+  private val propsOverride = Map[String, AnyRef](
+    ServerConfigs.BROKER_ID_CONFIG -> brokerId.toString,
+    KRaftConfigs.NODE_ID_CONFIG -> brokerId.toString
+  )
   private[server] val currentReporters = mutable.Map[String, MetricsReporter]()
   createReporters(config, clusterId, metricsReporterClasses(dynamicConfig.currentKafkaConfig.values()).asJava,
     Collections.emptyMap[String, Object])
