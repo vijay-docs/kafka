@@ -1,11 +1,26 @@
 org.apache.kafka.api.EndToEndClusterIdTest:
 - testEndToEndWithClassicProtocol
 - testEndToEndWithConsumerProtocol
+org.apache.kafka.network.ProcessorTest:
+- testParseRequestHeaderForProduceV0ToV2
+- testParseRequestHeaderWithDisabledApiVersion
+- testParseRequestHeaderWithUnsupportedApi
+- testParseRequestHeaderWithUnsupportedApiVersion
 org.apache.kafka.network.RequestConvertToJsonTest:
 - testAllApiVersionsResponseHandled
 - testAllRequestTypesHandled
 - testAllResponseTypesHandled
 - testClientInfoNode
+- testRequestDesc
+- testRequestDescMetrics
+- testRequestDescMetricsOmitsNonPositiveMetrics
+- testRequestHeaderNode
+org.apache.kafka.network.RequestTest:
+- testAlterRequests
+- testBuildEnvelopeResponse
+- testIncrementalAlterRequests
+- testJsonRequests
+- testNonAlterRequestsNotTransformed
 org.apache.kafka.network.SocketServerConfigsTest:
 - testAnotherListenerListToEndPointsWithIpV6
 - testAnotherListenerListToEndPointsWithNonDefaultProtoMap
@@ -58,6 +73,21 @@ org.apache.kafka.security.authorizer.AuthorizerTest:
 - testWildCardAcls
 org.apache.kafka.security.authorizer.AuthorizerUtilsTest:
 - testCreateAuthorizer
+org.apache.kafka.security.minikdc.MiniKdcTest:
+- shouldNotStopImmediatelyWhenStarted
+org.apache.kafka.server.ApiVersionsRequestTest:
+- testApiVersionsRequest
+- testApiVersionsRequestAfterSaslHandshakeRequest
+- testApiVersionsRequestBeforeSaslHandshakeRequest
+- testApiVersionsRequestIncludesUnreleasedApis
+- testApiVersionsRequestMetadataClusterCheckFail
+- testApiVersionsRequestMetadataClusterCheckPass
+- testApiVersionsRequestThroughControllerListener
+- testApiVersionsRequestValidationV0
+- testApiVersionsRequestValidationV0ThroughControllerListener
+- testApiVersionsRequestValidationV3
+- testApiVersionsRequestWithUnsupportedVersion
+- testApiVersionsRequestWithUnsupportedVersionOverSasl
 org.apache.kafka.server.AssignmentTest:
 - testAssignmentForNonExistentPartitionIsNotValid
 - testAssignmentForNonExistentTopicIsNotValid
@@ -87,6 +117,18 @@ org.apache.kafka.server.AssignmentsManagerTest:
 - testStartAndShutdown
 - testSuccessfulAssignment
 - testUnSuccessfulRequestCausesRetransmission
+org.apache.kafka.server.AuthHelperTest:
+- testAuthorize
+- testComputeDescribeClusterResponseSuccess
+- testComputeDescribeClusterResponseV0WithUnexpectedEndpointType
+- testComputeDescribeClusterResponseV0WithUnknownEndpointType
+- testComputeDescribeClusterResponseV1WithUnexpectedEndpointType
+- testComputeDescribeClusterResponseV1WithUnknownEndpointType
+- testComputeDescribeClusterResponseWhereControllerIsNotFound
+- testFilterByAuthorized
+- testFilterByAuthorizedIsResilientToMismatchedAuthorizeResults
+- testPartitionByAuthorized
+- testPartitionByAuthorizedWithoutAuthorizer
 org.apache.kafka.server.BootstrapControllersIntegrationTest:
 - testAcls
 - testAclsByControllers
@@ -135,6 +177,9 @@ org.apache.kafka.server.ClientMetricsManagerTest:
 - testGetTelemetrySubscriptionAfterPushTelemetryUnknownCompressionSucceeds
 - testGetTelemetrySubscriptionAfterPushTelemetryUnknownSubscriptionSucceeds
 - testGetTelemetryUpdateSubscription
+- testGetTelemetryV0RejectsOneUuidClientInstanceId
+- testGetTelemetryV1RejectsReservedClientInstanceId
+- testGetTelemetryV1UsesClientInstanceIdFromRequestHeader
 - testGetTelemetryWithoutSubscription
 - testPushTelemetry
 - testPushTelemetryAfterPushIntervalTime
@@ -147,9 +192,13 @@ org.apache.kafka.server.ClientMetricsManagerTest:
 - testPushTelemetryNullMetricsData
 - testPushTelemetryOnNewServer
 - testPushTelemetryPluginException
+- testPushTelemetryPluginTooLargeException
 - testPushTelemetrySubscriptionIdInvalid
 - testPushTelemetryTerminatingFlag
+- testPushTelemetryTerminatingFlagNotSetOnValidationFailure
 - testPushTelemetryThrottleError
+- testPushTelemetryV1RejectsReservedClientInstanceId
+- testPushTelemetryV1UsesClientInstanceIdFromRequestHeader
 - testRemoveConnection
 - testRemoveConnectionUnknownConnectionId
 - testUpdateSubscription
@@ -158,12 +207,14 @@ org.apache.kafka.server.ClientMetricsManagerTest:
 - testUpdateSubscriptionWithNullProperties
 - testUpdateSubscriptionWithPropertiesDeletion
 org.apache.kafka.server.CordonedLogDirsIntegrationTest:
+- testAlterPartitionWithCordonedLogDirs
+- testAlterReplicaWithCordonedLogDirs
 - testCordonUncordonLogDirs
 - testCordonUnknownLogDirs
 - testDecommissionBroker
+- testDecommissionLogDir
 - testFeatureNotEnabled
 - testFeatureNotEnabledStaticConfig
-- testReassignWithCordonedLogDirs
 - testStaticCordonUncordonLogDirs
 - testUpdateCordonedDirsViaController
 org.apache.kafka.server.DefaultApiVersionManagerTest:
@@ -193,6 +244,12 @@ org.apache.kafka.server.EligibleLeaderReplicasIntegrationTest:
 - testElrMemberShouldBeKickOutWhenUncleanShutdown
 - testHighWatermarkShouldNotAdvanceIfUnderMinIsr
 - testLastKnownLeaderShouldBeElectedIfEmptyElr
+org.apache.kafka.server.EnvelopeUtilsTest:
+- testHandleEnvelopeRequestBuildsForwardedRequest
+- testInvalidForwardedClientAddressIsRejected
+- testMissingPrincipalSerdeIsRejected
+- testNonForwardableApiIsRejected
+- testPrincipalDeserializationFailureIsRejected
 org.apache.kafka.server.ExpiringErrorCacheTest:
 - testCapacityEnforcement
 - testCapacityWithDifferentTTLs
@@ -239,33 +296,31 @@ org.apache.kafka.server.FetchSessionTest:
 - testToForgetPartitions
 - testUpdateAndGenerateResponseData
 - testZeroSizeFetchSession
+org.apache.kafka.server.ForwardingManagerTest:
+- testFailedAuthentication
+- testForwardingManagerMetricsOnComplete
+- testForwardingManagerMetricsOnTimeout
+- testForwardingTimeoutAfterRetry
+- testForwardingTimeoutWaitingForControllerDiscovery
+- testResponseCorrelationIdMismatch
+- testUnsupportedVersionFromNetworkClient
+- testUnsupportedVersions
+org.apache.kafka.server.InterBrokerOAuthIntegrationTest:
+- testReplicationWithBrokerLoginCallbackHandler
 org.apache.kafka.server.KRaftClusterTest:
 - testAbandonedFutureReplicaRecovered_mainReplicaInOfflineLogDir
 - testAbandonedFutureReplicaRecovered_mainReplicaInOnlineLogDir
-- testAuthorizerFailureFoundInControllerStartup
-- testClientQuotas
-- testClusterWithLowerCaseListeners
 - testControllerFailover
-- testCreateClusterAndClose
-- testCreateClusterAndCreateAndManyTopics
-- testCreateClusterAndCreateListDeleteTopic
 - testCreateClusterAndCreateTopicWithRemoteLogManagerInstantiation
 - testCreateClusterAndPerformReassignment
-- testCreateClusterAndRestartBrokerNode
 - testCreateClusterAndRestartControllerNode
-- testCreateClusterAndWaitForBrokerInRunningState
 - testCreateClusterWithAdvertisedHostAndPortDifferentFromSocketServer
 - testCreateClusterWithAdvertisedPortZero
-- testCreatePartitions
-- testDefaultClientQuotas
-- testDescribeKRaftVersion
 - testDescribeQuorumRequestToBrokers
 - testDescribeQuorumRequestToControllers
 - testDirectToControllerCommunicationFailsOnOlderMetadataVersion
-- testIncreaseNumIoThreads
 - testIncrementalAlterConfigs
 - testOldBootstrapMetadataFile
-- testOverlyLargeCreateTopics
 - testReconfigureControllerAuthorizer
 - testReconfigureControllerClientQuotas
 - testRegisteredControllerEndpoints
@@ -277,6 +332,8 @@ org.apache.kafka.server.KRaftClusterTest:
 - testTimedOutHeartbeats
 - testTopicDeletedAndRecreatedWhileBrokerIsDown
 - testUnregisterBroker
+- testUnregisterController
+- testUnregisterControllerError
 - testUpdateMetadataVersion
 org.apache.kafka.server.KRaftTopicCreatorTest:
 - testAuthenticationException
@@ -341,6 +398,10 @@ org.apache.kafka.server.ReconfigurableQuorumIntegrationTest:
 - testRemoveAndAddVoterWithInconsistentClusterId
 - testRemoveAndAddVoterWithValidClusterId
 - testRemoveController
+org.apache.kafka.server.ReplicaFetchTest:
+- testReplicaFetcherThread
+org.apache.kafka.server.SimpleApiVersionManagerTest:
+- testUnknownFeaturesHasNoMetadataVersion
 org.apache.kafka.server.UncleanLeaderElectionTest:
 - testTopicUncleanLeaderElectionEnableWithAlterTopicConfigsClassic
 - testTopicUncleanLeaderElectionEnableWithAlterTopicConfigsConsumer
@@ -357,6 +418,7 @@ org.apache.kafka.server.config.AbstractKafkaConfigTest:
 - testExtractGroupConfigMapExcludesInternalConfigWithUnconfiguredBrokerSynonym
 - testExtractGroupConfigMapIncludesInternalConfigWithConfiguredBrokerSynonym
 - testExtractGroupConfigMapIncludesNonInternalConfig
+- testExtractGroupConfigMapReturnsStreamsAssignor
 - testPopulateSynonymsOnEmptyMap
 - testPopulateSynonymsOnMapWithoutBrokerId
 - testPopulateSynonymsOnMapWithoutNodeId
@@ -368,10 +430,24 @@ org.apache.kafka.server.config.DelegationTokenManagerConfigsTest:
 - testOverride
 org.apache.kafka.server.config.DynamicBrokerConfigTest:
 - testBrokerConfigSynonyms
+- testDynamicClusterMirrorConfigReconfigurableConfigs
+- testDynamicClusterMirrorConfigValidation
+- testValidateConfigTypesResolvesConfigProviders
 org.apache.kafka.server.config.DynamicConfigTest:
 - testGroupIsRemovedWhenDynamicConfigsAreRemoved
 org.apache.kafka.server.config.MinInSyncReplicasConfigTest:
 - testDefaultKafkaConfig
+org.apache.kafka.server.logger.LoggingControllerTest:
+- testLoggerLevelIsResolved
+org.apache.kafka.server.logger.RuntimeLoggerManagerTest:
+- testAlterUnknownOperationNotAllowed
+- testOperationNotAllowed
+- testUnknownOperationNotAllowed
+- testValidateBogusLogLevelNameNotAllowed
+- testValidateDeleteLogLevelConfig
+- testValidateRemoveRootLogLevelConfigNotAllowed
+- testValidateSetLogLevelConfig
+- testValidateSetRootLogLevelConfig
 org.apache.kafka.server.metrics.BrokerServerMetricsTest:
 - testIgnoredStaticVoters
 - testLastAppliedRecordOffset
@@ -379,6 +455,9 @@ org.apache.kafka.server.metrics.BrokerServerMetricsTest:
 - testMetadataApplyErrorCount
 - testMetadataLoadErrorCount
 - testMetricsExported
+org.apache.kafka.server.metrics.ClientMetricsConfigsTest:
+- testMatchingPatternMayContainEqualsSign
+- testMatchingPatternWithoutEqualsSignIsRejected
 org.apache.kafka.server.metrics.ClientMetricsInstanceMetadataTest:
 - testIsMatchMismatchFail
 - testIsMatchMultiplePatternValid
@@ -408,6 +487,7 @@ org.apache.kafka.server.metrics.ForwardingManagerMetricsTest:
 - testRemoteTimeMs
 - testTimeoutMs
 org.apache.kafka.server.metrics.LinuxIoMetricsCollectorTest:
+- testAllMetricsWithRealWorldValues
 - testReadProcFile
 - testUnableToReadNonexistentProcFile
 org.apache.kafka.server.metrics.NodeMetricsTest:
@@ -432,6 +512,29 @@ org.apache.kafka.server.partition.AlterPartitionManagerTest:
 - testUnknownTopicPartition
 org.apache.kafka.server.purgatory.DelayedFutureTest:
 - testDelayedFuture
+org.apache.kafka.server.purgatory.DelayedProduceTest:
+- testConstructorMarksPendingPartitionsAsTimedOut
+- testRemovePartitionMetrics
+- testRemovePartitionMetricsForNonExistentPartition
+- testTryCompleteSkipsValidationForNonPendingPartitions
+- testTryCompleteWaitsWhileAnyPartitionPending
+- testTryCompleteWhenAllPartitionsHaveEnoughReplicas
+- testTryCompleteWhenReplicasNotCaughtUp
+- testTryCompleteWhenValidationReturnsError
+org.apache.kafka.server.quota.ClientQuotaManagerTest:
+- testClientIdNotSanitized
+- testExpireQuotaSensors
+- testExpireThrottleTimeSensor
+- testMaxValueInQuotaWindowWithNonDefaultQuotaWindow
+- testQuotaConfigPrecedence
+- testQuotaTypesEnabledUpdatesWithCustomCallback
+- testQuotaTypesEnabledUpdatesWithDefaultCallback
+- testQuotaViolation
+- testSetAndRemoveDefaultUserQuota
+- testSetAndRemoveUserClientQuota
+- testSetAndRemoveUserQuota
+- testThrottleTimeCappedToIntRange
+- testUserQuotaParsingWithDefaultClientIdQuota
 org.apache.kafka.server.quota.ClientQuotasRequestTest:
 - testAlterClientQuotasBadIp
 - testAlterClientQuotasInvalidEntityCombination
@@ -445,6 +548,8 @@ org.apache.kafka.server.quota.ClientQuotasRequestTest:
 - testDescribeClientQuotasInvalidFilterCombination
 - testDescribeClientQuotasMatchExact
 - testDescribeClientQuotasMatchPartial
+org.apache.kafka.server.quota.ClientRequestQuotaManagerTest:
+- testRequestPercentageQuotaViolation
 org.apache.kafka.server.quota.ClientSensorsTest:
 - testConstructorPreservesInputOrder
 - testConstructorThrowsExceptionWhenBothSensorsAreNull
@@ -452,6 +557,15 @@ org.apache.kafka.server.quota.ClientSensorsTest:
 - testConstructorThrowsExceptionWhenThrottleTimeSensorIsNull
 - testConstructorWithEmptyMap
 - testConstructorWithValidParameters
+org.apache.kafka.server.quota.ControllerMutationQuotaManagerTest:
+- testControllerMutationQuotaViolation
+- testNewPermissiveQuotaForReturnsStrictQuotaWhenQuotaIsEnabled
+- testNewPermissiveQuotaForReturnsUnboundedQuotaWhenQuotaIsDisabled
+- testNewStrictQuotaForReturnsStrictQuotaWhenQuotaIsEnabled
+- testNewStrictQuotaForReturnsUnboundedQuotaWhenQuotaIsDisabled
+- testPermissiveControllerMutationQuotaViolation
+- testStrictControllerMutationQuotaViolation
+- testThrottleTime
 org.apache.kafka.server.quota.ReplicationQuotaManagerTest:
 - shouldExceedQuotaThenReturnBackBelowBoundAsTimePasses
 - shouldSupportWildcardThrottledReplicas
@@ -470,7 +584,12 @@ org.apache.kafka.server.replica.ReplicaTest:
 - testResetReplicaStateWhenNewLeaderIsElectedAndReplicaIsNotInSync
 - testUpdateFetchState
 org.apache.kafka.server.requests.ProduceRequestTest:
+- testBrokerDefaultMaxDecompressedMessageBytesAppliesToTopicWithoutOverride
+- testBrokerDefaultMaxDecompressedMessageBytesIsDynamicallyReconfigurable
 - testCorruptLz4ProduceRequest
+- testIdempotentProduceWithNonZeroFirstSequenceOnNewPartition
+- testMaxDecompressedMessageBytesIsDynamicallyReconfigurable
+- testProduceRejectsCompressedRecordExceedingMaxDecompressedMessageBytes
 - testProduceToNonReplica
 - testProduceWithTimestampTooNew
 - testProduceWithTimestampTooOld
@@ -478,6 +597,100 @@ org.apache.kafka.server.requests.ProduceRequestTest:
 - testZSTDProduceRequest
 org.apache.kafka.server.share.CachedSharePartitionTest:
 - testCachedSharePartitionEqualsAndHashCode
+org.apache.kafka.server.share.dlq.ShareGroupDLQRecordFetcherTest:
+- combination
+- many
+- multiple
+- single
+- testAsyncReadResumeCompletesEmptyWhenProcessingThrows
+- testAsyncReadResumeWithNoProgressCompletesEmpty
+- testAsyncReadResumesLoopWhenPending
+- testCompressedBatchAfterUncompressedRespectsCombinedBudget
+- testCompressedBatchExceedingDecompressedBudgetSkippedButLaterBatchStillCollected
+- testCompressedBatchExceedingDecompressedBudgetSkipsBatch
+- testCompressedBatchFetchedCorrectly
+- testFetchAllRecordsInSingleRead
+- testFetchCompletesEmptyWhenReadAsyncThrows
+- testFetchRecordsAcrossMultipleReads
+- testFetchStopsOnceEnoughContentCollectedWithoutScanningWholeRange
+- testHardStopPreventsFurtherReads
+- testLegacyCompressedBatchExceedingCumulativeCapSkipsBatchButLaterBatchStillCollected
+- testMissingPartitionResultYieldsNoRecords
+- testMultipleBatchesInSingleReadStopAtBudgetBetweenBatches
+- testNoProgressYieldsNoRecords
+- testOversizedUncompressedRecordExcludedButLaterRecordStillCollected
+- testReadErrorMidRangeReturnsRecordsReadSoFar
+- testReadErrorYieldsNoRecords
+- testRecordsBeyondEndOffsetIgnored
+- testSingleOffsetFetch
+- testSingleReadWithUncompressedMagicV2AndLegacyCompressedBatchesAllCollected
+- testSingleRecordWithFabricatedLengthRejectedWithoutLargeAllocation
+- testUncompressedBatchStopsMidBatchOnceBudgetReached
+org.apache.kafka.server.share.dlq.ShareGroupDLQStateManagerTest:
+- testCoalesceProduceRequestsDefersHandlersThatExceedPartitionBudget
+- testCoalesceProduceRequestsKeepsDifferentDlqTopicsSeparate
+- testCoalesceProduceRequestsMergesPartitionsForSameDlqTopic
+- testCoalesceProduceRequestsMergesRecordsForSameDlqPartition
+- testCoalesceProduceRequestsSkipsHandlerWhoseTopicProduceDataThrows
+- testCoalesceProduceRequestsWithEmptyHandlerListProducesEmptyRequest
+- testCoalesceProduceRequestsWithSingleHandlerProducesOneTopicOnePartition
+- testCompleteHandlerSafelyIsolatesOneHandlersUncaughtExceptionFromOthers
+- testConstructorRejectsNullCacheHelper
+- testConstructorRejectsNullClient
+- testConstructorRejectsNullLogReader
+- testConstructorRejectsNullShareGroupMetrics
+- testConstructorRejectsNullTime
+- testConstructorRejectsNullTimer
+- testCreateTopicBuilderPinsCreateTimeAlongsideDlqEnableConfig
+- testDLQRecordCopyDisabledIgnoresReservedHeadersOnSourceRecords
+- testDLQRecordCopyDisabledSkipsFetch
+- testDLQRecordCopyEnabled
+- testDLQRecordCopyEnabledButInvalidConfigSkipsFetch
+- testDLQRecordCopyEnabledDropsReservedOriginalHeaderWhenCorrespondingDLQHeaderOmitted
+- testDLQRecordCopyEnabledFetchesOnceAcrossProduceRetries
+- testDLQRecordCopyEnabledOriginalHeader
+- testDLQRecordCopyEnabledWithErrorOnLogRead
+- testDLQRecordCopyEnabledWithMixedLocalAndRemoteFetch
+- testDLQRecordCopyEnabledWithMixedOriginalHeadersPerRecord
+- testDLQRecordCopyEnabledWithMultipleLogReaderIterations
+- testDLQRecordCopyEnabledWithPartialLogReaderRecords
+- testDLQRecordCopyEnabledWithRemoteFetch
+- testDLQRecordCopyEnabledWithRemoteFetchFailureSkipsRecords
+- testDlqAfterStopFailsWithIllegalState
+- testDlqBeforeStartFailsWithIllegalState
+- testDlqChunksOverMaxMessageBytesAcrossMultipleProduceRequests
+- testDlqCreateTopicFatalErrorFailsFuture
+- testDlqCreateTopicNoClusterNodesFailsFuture
+- testDlqCreateTopicPartialFailuresThenSucceeds
+- testDlqCreateTopicRetriesExhaustedFailsWithNetworkException
+- testDlqCreateTopicThenProduceSucceeds
+- testDlqEmptyTopicNameFailsValidation
+- testDlqExistingTopicWithoutDlqConfigAndPrefixMismatchReportsPrefixMismatch
+- testDlqExistingTopicWithoutDlqConfigFailsValidation
+- testDlqHappyPathExistingTopic
+- testDlqMultipleGroupsWithMixedOutcomes
+- testDlqProduceDisconnectIsRetriedNotImmediatelyFailed
+- testDlqProduceEmptyResponseFailsFuture
+- testDlqProduceFatalErrorFailsFuture
+- testDlqProduceNotLeaderOrFollowerExhaustsAndRecordsFailure
+- testDlqProducePartialFailuresThenSucceeds
+- testDlqProduceRetriesExhaustedFailsWithNetworkException
+- testDlqRecordCopyFirstProduceRoundGoesOutBeforeLaterRoundResolves
+- testDlqRecordCopyRetryOfSameRoundDoesNotRefetchButNewRoundDoes
+- testDlqRecordCopyRoundBudgetResetAcrossMultipleProduceRounds
+- testDlqResolvesSourceTopicNameViaCacheHelperWhenMissing
+- testDlqTopicMissingAndAutoCreateDisabledFailsValidation
+- testDlqTopicMissingAndPrefixMismatchFailsValidation
+- testDlqTopicPrefixEmptyStringSkipsPrefixCheck
+- testDlqTopicPrefixMismatchFailsValidation
+- testDlqTopicStartingWithUnderscoreFailsValidation
+- testDlqTwoEnqueuedRecordsBothComplete
+- testDlqValidationFailureCompletesFutureSynchronously
+- testFetcherBudgetSplitsRoundEvenWhenSizeFloorWouldHaveRoomForMore
+- testMultipleAccumulatedHandlersInNodeRPCMap
+- testResolveRoundSurvivesSynchronousExceptionFromMaybeFetchRecordData
+- testStartIsIdempotent
+- testStopWithoutStartIsNoOp
 org.apache.kafka.server.share.fetch.DelayedShareFetchKeyTest:
 - testDelayedShareFetchEqualsAndHashcode
 org.apache.kafka.server.share.fetch.PartitionMaxBytesStrategyTest:
@@ -517,6 +730,19 @@ org.apache.kafka.server.share.session.ShareSessionKeyTest:
 org.apache.kafka.server.share.session.ShareSessionTest:
 - testPartitionsToLogString
 - testPartitionsToLogStringEmpty
+org.apache.kafka.server.streams.InMemoryTopologyDescriptionPluginTest:
+- testCloseClearsAllState
+- testConcurrentWritesAreSafe
+- testConfigureIsNoOp
+- testDeleteIsIdempotentForUnknownGroup
+- testDeleteIsScopedToGroup
+- testDeleteTopologyRemovesEntry
+- testEpochAdvanceOverwritesPreviousDescription
+- testFuturesCompleteSynchronously
+- testGetReturnsNullForMissingGroup
+- testGetReturnsNullWhenEpochDoesNotMatch
+- testSetIsIdempotentAtSameEpoch
+- testSetThenGetRoundTrip
 org.apache.kafka.server.transaction.AddPartitionsToTxnManagerTest:
 - testAddPartitionsToTxnHandlerErrorHandling
 - testAddPartitionsToTxnManagerMetrics
